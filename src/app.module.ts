@@ -4,6 +4,19 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { TelegramModule } from "./telegram/telegram.module";
+import { UsersModule } from './users/users.module';
+import { DriversModule } from './drivers/drivers.module';
+import { ClientsModule } from './clients/clients.module';
+import { EmployeesModule } from './employees/employees.module';
+import { ServicesModule } from './services/services.module';
+import { ServiceExtensionsModule } from './service-extensions/service-extensions.module';
+import { CatalogExtrasModule } from './catalog-extras/catalog-extras.module';
+import { ServiceExtrasModule } from './service-extras/service-extras.module';
+import { ExtensionsModule } from './extensions/extensions.module';
+import { TripsModule } from './trips/trips.module';
+import { ClientAlertsModule } from './client-alerts/client-alerts.module';
+import { TelegramConversationsModule } from './telegram-conversations/telegram-conversations.module';
+import { EmployeePhotosModule } from './employee-photos/employee-photos.module';
 
 @Module({
   imports: [
@@ -21,6 +34,19 @@ import { TelegramModule } from "./telegram/telegram.module";
       synchronize: false, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
     }),
     TelegramModule,
+    UsersModule,
+    DriversModule,
+    ClientsModule,
+    EmployeesModule,
+    ServicesModule,
+    ServiceExtensionsModule,
+    CatalogExtrasModule,
+    ServiceExtrasModule,
+    ExtensionsModule,
+    TripsModule,
+    ClientAlertsModule,
+    TelegramConversationsModule,
+    EmployeePhotosModule,
   ],
   controllers: [AppController],
   providers: [AppService],
