@@ -36,6 +36,19 @@ export class Usuarios {
   @Column('bigint', { name: 'telegram_chat_id', nullable: true, unique: true })
   telegramChatId: string | null;
 
+  @Column('character varying', {
+    name: 'telegram_verification_code',
+    nullable: true,
+    length: 255,
+  })
+  telegramVerificationCode: string | null;
+
+  @Column('timestamp with time zone', {
+    name: 'telegram_verification_expires_at',
+    nullable: true,
+  })
+  telegramVerificationExpiresAt: Date | null;
+
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',

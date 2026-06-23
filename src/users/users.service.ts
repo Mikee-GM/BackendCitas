@@ -1,26 +1,81 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
+import { Usuarios } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService {
-  create(createUserDto: CreateUserDto) {
-    return 'This action adds a new user';
+  constructor(
+    @InjectRepository(Usuarios)
+    private readonly usuariosRepository: Repository<Usuarios>,
+  ) {}
+
+  async generateTelegramOtp(userId: string) {
+    const user = await this.usuariosRepository.findOne({
+      where: { id: userId },
+    });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos de validez
+
+    user.telegramVerificationCode = code;
+    user.telegramVerificationExpiresAt = expiresAt;
+    await this.usuariosRepository.save(user);
+
+    return {
+      code,
+      expiresAt,
+    };
+  }
+
+  async unlinkTelegram(userId: string) {
+    const user = await this.usuariosRepository.findOne({
+      where: { id: userId },
+    });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    user.telegramChatId = null;
+    user.telegramVerificationCode = null;
+    user.telegramVerificationExpiresAt = null;
+
+    await this.usuariosRepository.save(user);
+
+    return { unlinked: true };
+  }
+
+  async create(createUserDto: CreateUserDto) {
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(createUserDto.password, salt);
+    const user = this.usuariosRepository.create({
+      ...createUserDto,
+      passwordHash,
+    });
+    return this.usuariosRepository.save(user);
   }
 
   findAll() {
-    return `This action returns all users`;
+    return this.usuariosRepository.find();
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
+  findOne(id: string) {
+    return this.usuariosRepository.findOne({ where: { id } });
   }
 
-  update(id: number, updateUserDto: UpdateUserDto) {
-    return `This action updates a #${id} user`;
+  async update(id: string, updateUserDto: UpdateUserDto) {
+    await this.usuariosRepository.update(id, updateUserDto);
+    return this.findOne(id);
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} user`;
+  async remove(id: string) {
+    await this.usuariosRepository.delete(id);
+    return { deleted: true };
   }
 }
