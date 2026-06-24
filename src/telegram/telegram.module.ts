@@ -6,10 +6,11 @@ import { TelegramService } from './telegram.service';
 import { TelegramUpdate } from './telegram.update';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
+import { Empleadas } from '../employees/entities/employee.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Usuarios, Clientes]),
+    TypeOrmModule.forFeature([Usuarios, Clientes, Empleadas]),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {

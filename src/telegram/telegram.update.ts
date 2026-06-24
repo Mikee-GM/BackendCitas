@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
+import { Empleadas } from '../employees/entities/employee.entity';
 
 @Update()
 export class TelegramUpdate {
@@ -12,6 +13,8 @@ export class TelegramUpdate {
     private readonly usuariosRepository: Repository<Usuarios>,
     @InjectRepository(Clientes)
     private readonly clientesRepository: Repository<Clientes>,
+    @InjectRepository(Empleadas)
+    private readonly empleadasRepository: Repository<Empleadas>,
   ) {}
 
   @Start()
@@ -60,9 +63,10 @@ export class TelegramUpdate {
       Markup.inlineKeyboard([
         [
           Markup.button.callback('🎂 Ver Menú', 'ver_menu'),
-          Markup.button.callback('📖 Ver Ayuda', 'ver_ayuda'),
+          Markup.button.callback('👩‍🍳 Ver Empleadas', 'ver_empleadas'),
         ],
         [
+          Markup.button.callback('📖 Ver Ayuda', 'ver_ayuda'),
           Markup.button.url(
             '🌐 Visitar Web',
             'https://tu-sitio-pasteleria.com',
@@ -77,6 +81,7 @@ export class TelegramUpdate {
     await ctx.reply(
       'Comandos disponibles:\n' +
         '/start - Iniciar interacción con el bot\n' +
+        '/empleadas - Ver el catálogo de empleadas\n' +
         '/vincular <código> - Vincular cuenta de empleado o chofer\n' +
         '/desvincular - Desvincular tu cuenta de empleado o chofer\n' +
         '/help - Ver los comandos de ayuda',
@@ -185,6 +190,133 @@ export class TelegramUpdate {
     await ctx.reply(
       'Puedes usar /start para ver el menú principal, o vincular tu cuenta con /vincular <código> si eres personal.',
     );
+  }
+
+  async listEmpleadas(ctx: Context) {
+    const list = await this.empleadasRepository.find({
+      where: { catalogoActivo: true },
+    });
+
+    if (list.length === 0) {
+      await ctx.reply(
+        'No hay empleadas activas en el catálogo en este momento.',
+      );
+      return;
+    }
+
+    await ctx.reply('Catálogo de Empleadas:');
+
+    for (const e of list) {
+      const caption = `*${e.nombreArtistico}*\n💰 *Tarifa:* $${e.precioBaseHora}/hr`;
+      const keyboard = Markup.inlineKeyboard([
+        Markup.button.callback(
+          '🔍 Ver Perfil Completo',
+          `ver_empleada:${e.id}`,
+        ),
+      ]);
+
+      const hasValidPhoto =
+        e.fotoPerfilUrl &&
+        (e.fotoPerfilUrl.startsWith('http://') ||
+          e.fotoPerfilUrl.startsWith('https://'));
+
+      if (hasValidPhoto) {
+        try {
+          await ctx.replyWithPhoto(e.fotoPerfilUrl!, {
+            caption,
+            parse_mode: 'Markdown',
+            ...keyboard,
+          });
+        } catch (error) {
+          // Fallback si falla la descarga de la imagen por Telegram
+          await ctx.reply(caption, {
+            parse_mode: 'Markdown',
+            ...keyboard,
+          });
+        }
+      } else {
+        await ctx.reply(caption, {
+          parse_mode: 'Markdown',
+          ...keyboard,
+        });
+      }
+    }
+  }
+
+  @Command('empleadas')
+  async onCommandEmpleadas(@Ctx() ctx: Context) {
+    await this.listEmpleadas(ctx);
+  }
+
+  @Action('ver_empleadas')
+  async onActionVerEmpleadas(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    await this.listEmpleadas(ctx);
+  }
+
+  @Action(/^ver_empleada:(.+)$/)
+  async onVerEmpleado(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const id = match[1];
+
+    const empleada = await this.empleadasRepository.findOne({
+      where: { id },
+      relations: { empleadaFotos: true },
+    });
+
+    if (!empleada) {
+      await ctx.reply('La empleada seleccionada ya no está disponible.');
+      return;
+    }
+
+    const status = empleada.disponible ? '🟢 Disponible' : '🔴 Ocupada';
+    const caption =
+      `*${empleada.nombreArtistico}*\n` +
+      `Estado: ${status}\n` +
+      `💰 *Tarifa:* $${empleada.precioBaseHora}/hr\n\n` +
+      `_${empleada.descripcion || 'Sin descripción'}_`;
+
+    const photos: string[] = [];
+    if (
+      empleada.fotoPerfilUrl &&
+      (empleada.fotoPerfilUrl.startsWith('http://') ||
+        empleada.fotoPerfilUrl.startsWith('https://'))
+    ) {
+      photos.push(empleada.fotoPerfilUrl);
+    }
+    if (empleada.empleadaFotos && empleada.empleadaFotos.length > 0) {
+      empleada.empleadaFotos.forEach((f) => {
+        if (
+          f.url &&
+          (f.url.startsWith('http://') || f.url.startsWith('https://'))
+        ) {
+          photos.push(f.url);
+        }
+      });
+    }
+
+    if (photos.length > 0) {
+      try {
+        const mediaGroup = photos.map((url, index) => ({
+          type: 'photo' as const,
+          media: url,
+          caption: index === 0 ? caption : undefined,
+          parse_mode: 'Markdown' as const,
+        }));
+
+        await ctx.replyWithMediaGroup(mediaGroup);
+      } catch (error) {
+        // Fallback si Telegram no puede descargar las imágenes (por ej. si apuntan a localhost)
+        await ctx.reply(
+          caption + '\n\n_(Nota: Las fotos no se pudieron cargar en Telegram)_',
+          { parse_mode: 'Markdown' },
+        );
+      }
+    } else {
+      await ctx.reply(caption, { parse_mode: 'Markdown' });
+    }
   }
 
   @On('text')
