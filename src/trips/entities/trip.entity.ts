@@ -44,7 +44,7 @@ export class Viajes {
       'rechazado',
       'cancelado',
     ],
-    default: () => "'notificado'",
+    default: 'notificado',
   })
   estado:
     | 'notificado'

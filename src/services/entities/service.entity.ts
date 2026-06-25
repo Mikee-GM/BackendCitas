@@ -118,7 +118,7 @@ export class Servicios {
   @Column('enum', {
     name: 'estado',
     enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
-    default: () => "'pendiente'",
+    default: 'pendiente',
   })
   estado: 'pendiente' | 'en_curso' | 'finalizado' | 'cancelado';
 

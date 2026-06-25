@@ -5,6 +5,18 @@ import { Repository, MoreThan } from 'typeorm';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
+import { Servicios } from '../services/entities/service.entity';
+
+interface SessionData {
+  step?: 'AWAITING_DURATION' | 'AWAITING_PAYMENT_METHOD' | 'AWAITING_LOCATION';
+  empleadaId?: string;
+  duracionPactadaHoras?: number;
+  metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
+}
+
+interface BotContext extends Context {
+  session?: SessionData;
+}
 
 @Update()
 export class TelegramUpdate {
@@ -15,6 +27,8 @@ export class TelegramUpdate {
     private readonly clientesRepository: Repository<Clientes>,
     @InjectRepository(Empleadas)
     private readonly empleadasRepository: Repository<Empleadas>,
+    @InjectRepository(Servicios)
+    private readonly serviciosRepository: Repository<Servicios>,
   ) {}
 
   @Start()
@@ -297,6 +311,15 @@ export class TelegramUpdate {
       });
     }
 
+    const hireKeyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '🤝 Contratar',
+          `contratar_empleada:${empleada.id}`,
+        ),
+      ],
+    ]);
+
     if (photos.length > 0) {
       try {
         const mediaGroup = photos.map((url, index) => ({
@@ -307,24 +330,275 @@ export class TelegramUpdate {
         }));
 
         await ctx.replyWithMediaGroup(mediaGroup);
+        await ctx.reply('¿Deseas contratar a esta empleada?', hireKeyboard);
       } catch (error) {
         // Fallback si Telegram no puede descargar las imágenes (por ej. si apuntan a localhost)
         await ctx.reply(
           caption + '\n\n_(Nota: Las fotos no se pudieron cargar en Telegram)_',
-          { parse_mode: 'Markdown' },
+          { parse_mode: 'Markdown', ...hireKeyboard },
         );
       }
     } else {
-      await ctx.reply(caption, { parse_mode: 'Markdown' });
+      await ctx.reply(caption, { parse_mode: 'Markdown', ...hireKeyboard });
     }
   }
 
+  @Action(/^contratar_empleada:(.+)$/)
+  async onContratarEmpleada(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const empleadaId = match[1];
+
+    const empleada = await this.empleadasRepository.findOne({
+      where: { id: empleadaId },
+    });
+
+    if (!empleada) {
+      await ctx.reply('La empleada seleccionada ya no está disponible.');
+      return;
+    }
+
+    if (!ctx.session) {
+      ctx.session = {};
+    }
+
+    ctx.session.step = 'AWAITING_DURATION';
+    ctx.session.empleadaId = empleadaId;
+
+    await ctx.reply(
+      `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
+        `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('1 Hora', 'duracion_1'),
+            Markup.button.callback('2 Horas', 'duracion_2'),
+            Markup.button.callback('3 Horas', 'duracion_3'),
+          ],
+          [
+            Markup.button.callback('4 Horas', 'duracion_4'),
+            Markup.button.callback('5 Horas', 'duracion_5'),
+            Markup.button.callback('6 Horas', 'duracion_6'),
+          ],
+          [Markup.button.callback('8 Horas', 'duracion_8')],
+        ]),
+      },
+    );
+  }
+
+  @Action(/^duracion_(\d+(\.\d+)?)$/)
+  async onSelectDuration(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    if (ctx.session?.step !== 'AWAITING_DURATION') {
+      await ctx.reply('No hay ningún proceso de contratación activo.');
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const duracion = parseFloat(match[1]);
+
+    ctx.session.duracionPactadaHoras = duracion;
+    ctx.session.step = 'AWAITING_PAYMENT_METHOD';
+
+    await ctx.reply(
+      `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
+        `💳 Ahora, selecciona el método de pago:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
+            Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
+          ],
+          [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
+        ]),
+      },
+    );
+  }
+
+  @Action(/^pago_(efectivo|tarjeta|transferencia)$/)
+  async onSelectPayment(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    if (ctx.session?.step !== 'AWAITING_PAYMENT_METHOD') {
+      await ctx.reply('No hay ningún proceso de contratación activo.');
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const metodo = match[1] as 'efectivo' | 'tarjeta' | 'transferencia';
+
+    ctx.session.metodoPago = metodo;
+    ctx.session.step = 'AWAITING_LOCATION';
+
+    await ctx.reply(
+      `✅ Método de pago seleccionado: *${metodo.toUpperCase()}*.\n\n` +
+        `📍 Por último, necesitamos tu ubicación para registrar el servicio.\n` +
+        `Por favor, presiona el botón de abajo para compartir tu ubicación de manera segura:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.keyboard([
+          [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+        ])
+          .oneTime()
+          .resize(),
+      },
+    );
+  }
+
+  @On(['location', 'venue'])
+  async onLocation(@Ctx() ctx: BotContext) {
+    if (ctx.session?.step !== 'AWAITING_LOCATION') {
+      await ctx.reply(
+        'Por favor, inicia la contratación de una empleada desde el catálogo primero.',
+      );
+      return;
+    }
+
+    const message = ctx.message as any;
+    let lat: string;
+    let lng: string;
+    let notasUbicacion: string | null = null;
+
+    if (message?.venue) {
+      const venue = message.venue;
+      lat = venue.location.latitude.toString();
+      lng = venue.location.longitude.toString();
+      notasUbicacion = `Lugar seleccionado: ${venue.title}\nDirección: ${venue.address}`;
+    } else if (message?.location) {
+      const location = message.location;
+      lat = location.latitude.toString();
+      lng = location.longitude.toString();
+    } else {
+      await ctx.reply(
+        '❌ No se pudo obtener la ubicación. Por favor intenta de nuevo.',
+      );
+      return;
+    }
+
+    const { empleadaId, duracionPactadaHoras, metodoPago } = ctx.session;
+
+    if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
+      await ctx.reply(
+        '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
+      );
+      ctx.session = {};
+      return;
+    }
+
+    const telegramId = ctx.from?.id.toString();
+    const client = await this.clientesRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!client) {
+      await ctx.reply('❌ Cliente no encontrado. Por favor inicia con /start');
+      ctx.session = {};
+      return;
+    }
+
+    const empleada = await this.empleadasRepository.findOne({
+      where: { id: empleadaId },
+    });
+
+    if (!empleada) {
+      await ctx.reply('La empleada seleccionada ya no está disponible.');
+      ctx.session = {};
+      return;
+    }
+
+    const jefe = await this.usuariosRepository.findOne({
+      where: [
+        { rol: 'jefe', activo: true },
+        { rol: 'admin', activo: true },
+      ],
+    });
+
+    if (!jefe) {
+      await ctx.reply(
+        '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
+      );
+      return;
+    }
+
+    const nuevoServicio = this.serviciosRepository.create({
+      clienteId: client.id,
+      empleadaId: empleada.id,
+      jefeId: jefe.id,
+      duracionPactadaHoras: duracionPactadaHoras.toString(),
+      metodoPago: metodoPago,
+      ubicacionClienteLat: lat,
+      ubicacionClienteLng: lng,
+      precioBaseHoraPactado: empleada.precioBaseHora.toString(),
+      estado: 'pendiente',
+      notas: notasUbicacion,
+    });
+
+    await this.serviciosRepository.save(nuevoServicio);
+
+    ctx.session = {};
+
+    let msgExito =
+      `🎉 *¡Servicio Solicitado con Éxito!*\n\n` +
+      `📝 *Resumen del Servicio:*\n` +
+      `• *Empleada:* ${empleada.nombreArtistico}\n` +
+      `• *Duración:* ${duracionPactadaHoras} horas\n` +
+      `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+      `• *Tarifa Pactada:* $${empleada.precioBaseHora}/hr\n` +
+      `• *Estado:* Pendiente de aprobación\n`;
+
+    if (notasUbicacion) {
+      msgExito += `• *Ubicación:* ${message.venue.title} (${message.venue.address})\n`;
+    }
+
+    msgExito += `\nPronto un administrador se pondrá en contacto contigo. ¡Gracias por tu preferencia!`;
+
+    await ctx.reply(msgExito, {
+      parse_mode: 'Markdown',
+      ...Markup.removeKeyboard(),
+    });
+  }
+
   @On('text')
-  async onMessage(@Ctx() ctx: Context) {
+  async onMessage(@Ctx() ctx: BotContext) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    // Check who is messaging
+    const step = ctx.session?.step;
+
+    if (step === 'AWAITING_DURATION') {
+      const text = (ctx.message as { text?: string })?.text || '';
+      const duracion = parseFloat(text.replace(',', '.'));
+
+      if (isNaN(duracion) || duracion <= 0) {
+        await ctx.reply(
+          '❌ La duración debe ser un número válido mayor a 0 (ejemplo: 2 o 3.5).\n' +
+            'Por favor, intenta nuevamente:',
+        );
+        return;
+      }
+
+      ctx.session!.duracionPactadaHoras = duracion;
+      ctx.session!.step = 'AWAITING_PAYMENT_METHOD';
+
+      await ctx.reply(
+        `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
+          `💳 Ahora, selecciona el método de pago:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
+              Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
+            ],
+            [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
+          ]),
+        },
+      );
+      return;
+    }
+
     const user = await this.usuariosRepository.findOne({
       where: { telegramChatId: telegramId },
     });
@@ -337,7 +611,6 @@ export class TelegramUpdate {
       return;
     }
 
-    // Check if client is registered (auto-register just in case they skipped start)
     let client = await this.clientesRepository.findOne({
       where: { telegramChatId: telegramId },
     });
