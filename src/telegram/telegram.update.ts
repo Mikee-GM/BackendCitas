@@ -449,12 +449,8 @@ export class TelegramUpdate {
 
   @On(['location', 'venue'])
   async onLocation(@Ctx() ctx: BotContext) {
-    if (ctx.session?.step !== 'AWAITING_LOCATION') {
-      await ctx.reply(
-        'Por favor, inicia la contratación de una empleada desde el catálogo primero.',
-      );
-      return;
-    }
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
 
     const message = ctx.message as any;
     let lat: string;
@@ -477,17 +473,52 @@ export class TelegramUpdate {
       return;
     }
 
-    const { empleadaId, duracionPactadaHoras, metodoPago } = ctx.session;
+    // Verificar si es personal del sistema (chofer o empleada)
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+      relations: { choferes: true, empleadas: true },
+    });
+
+    if (user) {
+      if (user.rol === 'chofer' && user.choferes) {
+        user.choferes.ubicacionLat = lat;
+        user.choferes.ubicacionLng = lng;
+        user.choferes.ultimaUbicacionAt = new Date();
+        await this.usuariosRepository.manager.save(user.choferes);
+        await ctx.reply(`📍 Ubicación actualizada correctamente para el chofer: ${user.choferes.nombre}`);
+        return;
+      }
+
+      if (user.rol === 'empleada' && user.empleadas) {
+        user.empleadas.ubicacionLat = lat;
+        user.empleadas.ubicacionLng = lng;
+        user.empleadas.ultimaUbicacionAt = new Date();
+        await this.usuariosRepository.manager.save(user.empleadas);
+        await ctx.reply(`📍 Ubicación actualizada correctamente para la empleada: ${user.empleadas.nombreArtistico}`);
+        return;
+      }
+    }
+
+    // Si no es personal, seguir el flujo de cliente para contratación
+    if (ctx.session?.step !== 'AWAITING_LOCATION') {
+      await ctx.reply(
+        'Por favor, inicia la contratación de una empleada desde el catálogo primero.',
+      );
+      return;
+    }
+
+    const { empleadaId, duracionPactadaHoras, metodoPago } = ctx.session || {};
 
     if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
       await ctx.reply(
         '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
       );
-      ctx.session = {};
+      if (ctx.session) {
+        ctx.session = {};
+      }
       return;
     }
 
-    const telegramId = ctx.from?.id.toString();
     const client = await this.clientesRepository.findOne({
       where: { telegramChatId: telegramId },
     });
