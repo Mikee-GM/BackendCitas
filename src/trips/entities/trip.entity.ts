@@ -19,8 +19,8 @@ export class Viajes {
   @Column('uuid', { name: 'servicio_id', unique: true })
   servicioId: string;
 
-  @Column('uuid', { name: 'chofer_id' })
-  choferId: string;
+  @Column('uuid', { name: 'chofer_id', nullable: true })
+  choferId: string | null;
 
   @Column('enum', { name: 'tipo', unique: true, enum: ['ida', 'regreso'] })
   tipo: 'ida' | 'regreso';
@@ -80,9 +80,10 @@ export class Viajes {
 
   @ManyToOne(() => Choferes, (choferes) => choferes.viajes, {
     onDelete: 'RESTRICT',
+    nullable: true,
   })
   @JoinColumn([{ name: 'chofer_id', referencedColumnName: 'id' }])
-  chofer: Choferes;
+  chofer: Choferes | null;
 
   @ManyToOne(() => Servicios, (servicios) => servicios.viajes, {
     onDelete: 'CASCADE',

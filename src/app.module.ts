@@ -18,10 +18,12 @@ import { ClientAlertsModule } from './client-alerts/client-alerts.module';
 import { TelegramConversationsModule } from './telegram-conversations/telegram-conversations.module';
 import { EmployeePhotosModule } from './employee-photos/employee-photos.module';
 import { AuthModule } from './auth/auth.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
     AuthModule,
+    RealtimeModule,
     ConfigModule.forRoot({
       isGlobal: true,
     }),

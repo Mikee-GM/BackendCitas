@@ -1,11 +1,18 @@
+import { Inject, forwardRef } from '@nestjs/common';
 import { Update, Start, Help, On, Ctx, Action, Command } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, DataSource } from 'typeorm';
+import { JwtService } from '@nestjs/jwt';
+import { RealtimeEventsService } from '../realtime/realtime.service';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
+import { Viajes } from '../trips/entities/trip.entity';
+import { Choferes } from '../drivers/entities/driver.entity';
+import { ServicesService } from '../services/services.service';
+import { TelegramService } from './telegram.service';
 
 interface SessionData {
   step?: 'AWAITING_DURATION' | 'AWAITING_PAYMENT_METHOD' | 'AWAITING_LOCATION';
@@ -29,6 +36,13 @@ export class TelegramUpdate {
     private readonly empleadasRepository: Repository<Empleadas>,
     @InjectRepository(Servicios)
     private readonly serviciosRepository: Repository<Servicios>,
+    private readonly realtimeEventsService: RealtimeEventsService,
+    private readonly jwtService: JwtService,
+    private readonly dataSource: DataSource,
+    @Inject(forwardRef(() => ServicesService))
+    private readonly servicesService: ServicesService,
+    @Inject(forwardRef(() => TelegramService))
+    private readonly telegramService: TelegramService,
   ) {}
 
   @Start()
@@ -159,6 +173,29 @@ export class TelegramUpdate {
         `Rol: ${user.rol.toUpperCase()}\n` +
         `Ahora puedes interactuar con el bot para tus tareas laborales.`,
     );
+
+    if (user.rol === 'chofer') {
+      const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
+      if (driversGroupId) {
+        try {
+          const invite = await ctx.telegram.createChatInviteLink(
+            driversGroupId,
+            {
+              member_limit: 1,
+              expire_date: Math.floor(Date.now() / 1000) + 86400, // Expire in 1 day
+            },
+          );
+          await ctx.reply(
+            `🚗 *Grupo de Choferes:*\n` +
+              `Por favor únete al canal de coordinación mediante este enlace de un solo uso:\n` +
+              `\${invite.invite_link}`,
+            { parse_mode: 'Markdown' },
+          );
+        } catch (err) {
+          console.error('Error al generar invite link para el chofer:', err);
+        }
+      }
+    }
   }
 
   @Command('desvincular')
@@ -184,6 +221,33 @@ export class TelegramUpdate {
 
     await ctx.reply(
       `Tu cuenta (${user.email}) ha sido desvinculada exitosamente de este Telegram.`,
+    );
+  }
+
+  @Command('panel')
+  async onPanel(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user || (user.rol !== 'jefe' && user.rol !== 'admin')) {
+      await ctx.reply(
+        '❌ No tienes permisos de Jefe o Administrador para acceder al panel.',
+      );
+      return;
+    }
+
+    const payload = { sub: user.id, email: user.email, rol: user.rol };
+    const token = this.jwtService.sign(payload);
+
+    await ctx.reply(
+      `🔑 *Token de Acceso Jefes:*\n\n` +
+        `\`${token}\`\n\n` +
+        `Usa este token para autenticar tu panel externo conectándote al flujo de Server-Sent Events (SSE).`,
+      { parse_mode: 'Markdown' },
     );
   }
 
@@ -485,7 +549,9 @@ export class TelegramUpdate {
         user.choferes.ubicacionLng = lng;
         user.choferes.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.choferes);
-        await ctx.reply(`📍 Ubicación actualizada correctamente para el chofer: ${user.choferes.nombre}`);
+        await ctx.reply(
+          `📍 Ubicación actualizada correctamente para el chofer: ${user.choferes.nombre}`,
+        );
         return;
       }
 
@@ -494,7 +560,9 @@ export class TelegramUpdate {
         user.empleadas.ubicacionLng = lng;
         user.empleadas.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.empleadas);
-        await ctx.reply(`📍 Ubicación actualizada correctamente para la empleada: ${user.empleadas.nombreArtistico}`);
+        await ctx.reply(
+          `📍 Ubicación actualizada correctamente para la empleada: ${user.empleadas.nombreArtistico}`,
+        );
         return;
       }
     }
@@ -539,24 +607,32 @@ export class TelegramUpdate {
       return;
     }
 
-    const jefe = await this.usuariosRepository.findOne({
-      where: [
-        { rol: 'jefe', activo: true },
-        { rol: 'admin', activo: true },
-      ],
-    });
+    const isIndependent = empleada.tipo === 'independiente';
+    let jefeId: string;
 
-    if (!jefe) {
-      await ctx.reply(
-        '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
-      );
-      return;
+    if (isIndependent) {
+      jefeId = empleada.usuarioId;
+    } else {
+      const jefe = await this.usuariosRepository.findOne({
+        where: [
+          { rol: 'jefe', activo: true },
+          { rol: 'admin', activo: true },
+        ],
+      });
+
+      if (!jefe) {
+        await ctx.reply(
+          '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
+        );
+        return;
+      }
+      jefeId = jefe.id;
     }
 
     const nuevoServicio = this.serviciosRepository.create({
       clienteId: client.id,
       empleadaId: empleada.id,
-      jefeId: jefe.id,
+      jefeId: jefeId,
       duracionPactadaHoras: duracionPactadaHoras.toString(),
       metodoPago: metodoPago,
       ubicacionClienteLat: lat,
@@ -567,6 +643,30 @@ export class TelegramUpdate {
     });
 
     await this.serviciosRepository.save(nuevoServicio);
+
+    // Emit event to Jefes in real-time
+    const serviceWithRelations = await this.serviciosRepository.findOne({
+      where: { id: nuevoServicio.id },
+      relations: { cliente: true, empleada: true },
+    });
+    if (serviceWithRelations) {
+      this.realtimeEventsService.emitToJefes({
+        type: 'service_requested',
+        data: serviceWithRelations,
+      });
+
+      // Enviar notificación a Telegram usando TelegramService
+      try {
+        await this.telegramService.notifyJefesNewService(
+          serviceWithRelations.id,
+        );
+      } catch (err) {
+        console.error(
+          'Error al enviar notificaciones de Telegram para el nuevo servicio:',
+          err,
+        );
+      }
+    }
 
     ctx.session = {};
 
@@ -665,5 +765,176 @@ export class TelegramUpdate {
       `Hola ${client.nombreTelegram || 'Cliente'}. ` +
         `He recibido tu mensaje. Un administrador se pondrá en contacto contigo pronto.`,
     );
+  }
+
+  @Action(/^aceptar_viaje:(.+)$/)
+  async onAceptarViaje(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      await ctx.answerCbQuery(
+        '❌ Solo los choferes vinculados pueden tomar este viaje.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({
+      where: { usuarioId: user.id },
+    });
+
+    if (!chofer) {
+      await ctx.answerCbQuery(
+        '❌ No se encontró tu perfil de chofer en el sistema.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const viajeId = match[1];
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const updateResult = await manager
+        .createQueryBuilder()
+        .update(Viajes)
+        .set({
+          choferId: chofer.id,
+          estado: 'aceptado',
+          horaAceptacion: new Date(),
+        })
+        .where('id = :viajeId AND "chofer_id" IS NULL', { viajeId })
+        .execute();
+
+      return updateResult.affected === 1;
+    });
+
+    if (result) {
+      await ctx.answerCbQuery('✅ ¡Viaje asignado con éxito!', {
+        show_alert: true,
+      });
+
+      const driverName = chofer.nombre;
+      try {
+        const messageText = (ctx.callbackQuery?.message as any)?.text || '';
+        await ctx.editMessageText(
+          messageText + `\n\n✅ *Viaje tomado por:* ${driverName}`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        console.error('Error al actualizar mensaje de grupo:', err);
+      }
+
+      const trip = await this.dataSource.getRepository(Viajes).findOne({
+        where: { id: viajeId },
+        relations: { servicio: { empleada: true } },
+      });
+
+      if (trip && trip.servicio) {
+        this.realtimeEventsService.emitToDriver(chofer.id, {
+          type: 'new_trip',
+          data: trip,
+        });
+
+        this.realtimeEventsService.emitToEmployee(trip.servicio.empleadaId, {
+          type: 'trip_accepted',
+          data: {
+            tripId: trip.id,
+            choferName: driverName,
+            serviceId: trip.servicio.id,
+          },
+        });
+
+        this.realtimeEventsService.emitToJefes({
+          type: 'trip_accepted',
+          data: {
+            tripId: trip.id,
+            choferName: driverName,
+            serviceId: trip.servicio.id,
+          },
+        });
+      }
+    } else {
+      await ctx.answerCbQuery(
+        '❌ Este viaje ya ha sido tomado por otro chofer.',
+        { show_alert: true },
+      );
+    }
+  }
+
+  @Action(/^jefe_autorizar:(.+):([01])$/)
+  async onJefeAutorizar(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user) {
+      await ctx.answerCbQuery(
+        '❌ No tienes permisos para realizar esta acción.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const serviceId = match[1];
+    const accept = match[2] === '1';
+
+    // Obtener información del servicio para validar si es una empleada independiente autorizándose a sí misma
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: serviceId },
+      relations: { empleada: true },
+    });
+
+    if (!servicio) {
+      await ctx.answerCbQuery('❌ Servicio no encontrado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    const isIndependentEmployee =
+      servicio.empleada &&
+      servicio.empleada.tipo === 'independiente' &&
+      servicio.empleada.usuarioId === user.id;
+
+    if (user.rol !== 'jefe' && user.rol !== 'admin' && !isIndependentEmployee) {
+      await ctx.answerCbQuery(
+        '❌ No tienes permisos para autorizar este servicio.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    try {
+      if (accept) {
+        await this.servicesService.aceptar(serviceId, user.id);
+        await ctx.answerCbQuery('🟢 Servicio Aceptado exitosamente.');
+      } else {
+        await this.servicesService.rechazar(serviceId, user.id);
+        await ctx.answerCbQuery('🔴 Servicio Rechazado.');
+      }
+
+      const originalText = (ctx.callbackQuery?.message as any)?.text || '';
+      const statusLabel = accept ? '🟢 ACEPTADO' : '🔴 RECHAZADO';
+      await ctx.editMessageText(
+        originalText + `\n\n📢 *Resolución:* ${statusLabel} por ${user.email}`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err: any) {
+      console.error('Error al autorizar servicio desde Telegram:', err);
+      await ctx.answerCbQuery(
+        err.message || 'Error al procesar la solicitud.',
+        { show_alert: true },
+      );
+    }
   }
 }

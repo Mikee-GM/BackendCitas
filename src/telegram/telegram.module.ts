@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -9,10 +9,14 @@ import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
+import { AuthModule } from '../auth/auth.module';
+import { ServicesModule } from '../services/services.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Usuarios, Clientes, Empleadas, Servicios]),
+    AuthModule,
+    forwardRef(() => ServicesModule),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
@@ -31,6 +35,6 @@ import { Servicios } from '../services/entities/service.entity';
     }),
   ],
   providers: [TelegramService, TelegramUpdate],
-  exports: [TelegramService],
+  exports: [TelegramService, TelegrafModule],
 })
 export class TelegramModule {}
