@@ -33,7 +33,7 @@ export class UserSeederService implements OnApplicationBootstrap {
 
     if (adminExists) {
       this.logger.log(
-        'El usuario administrador ya existe en la base de datos.',
+        'El usuario administrador ya existe en la base de datos. Prueba jeje',
       );
       return;
     }

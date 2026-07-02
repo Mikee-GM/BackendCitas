@@ -35,7 +35,7 @@ import { AuthModule } from './auth/auth.module';
       autoLoadEntities: true,
       entities: [__dirname + '/**/*.entity.js', __dirname + '/**/*.entity.ts'],
       synchronize: false, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
-      migrationsRun: true,
+      migrationsRun: false,
       migrations: [__dirname + '/migrations/*{.ts,.js}'],
     }),
     TelegramModule,

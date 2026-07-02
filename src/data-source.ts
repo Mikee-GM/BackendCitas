@@ -24,7 +24,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DATABASE_USER || 'postgres',
   password: process.env.DATABASE_PASSWORD || 'postgres',
   database: process.env.DATABASE_NAME || 'chamba_pasteles',
-  synchronize: false,
+  synchronize: true,
   logging: true,
   entities: [join(__dirname, '**/*.entity{.ts,.js}')],
   migrations: [join(__dirname, 'migrations/*{.ts,.js}')],
