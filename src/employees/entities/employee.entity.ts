@@ -84,6 +84,13 @@ export class Empleadas {
   })
   createdAt: Date;
 
+  @Column('enum', {
+    name: 'tipo',
+    enum: ['independiente', 'agencia'],
+    default: 'independiente',
+  })
+  tipo: 'independiente' | 'agencia';
+
   @OneToMany(() => EmpleadaFotos, (empleadaFotos) => empleadaFotos.empleada)
   empleadaFotos: EmpleadaFotos[];
 

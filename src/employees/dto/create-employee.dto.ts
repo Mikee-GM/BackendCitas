@@ -8,6 +8,7 @@ import {
   MinLength,
   IsNumber,
   IsArray,
+  IsEnum,
 } from 'class-validator';
 
 export class CreateEmployeeDto {
@@ -92,4 +93,10 @@ export class CreateEmployeeDto {
   })
   @IsOptional()
   readonly fotosExtra?: string[];
+
+  @IsEnum(['independiente', 'agencia'], {
+    message: 'El tipo de empleada debe ser independiente o agencia',
+  })
+  @IsNotEmpty({ message: 'El tipo de empleada es obligatorio' })
+  readonly tipo: 'independiente' | 'agencia';
 }

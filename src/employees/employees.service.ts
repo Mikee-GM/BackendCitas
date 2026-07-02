@@ -40,6 +40,7 @@ export class EmployeesService {
       ubicacionLat,
       ubicacionLng,
       fotosExtra,
+      tipo,
     } = createEmployeeDto;
 
     // 1. Validar que el email no esté registrado
@@ -90,6 +91,7 @@ export class EmployeesService {
         catalogoActivo: catalogoActivo ?? true,
         ubicacionLat: ubicacionLat || null,
         ubicacionLng: ubicacionLng || null,
+        tipo,
       });
       const empleadaGuardada = await manager.save(Empleadas, nuevaEmpleada);
 
