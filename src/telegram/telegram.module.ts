@@ -5,6 +5,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { session } from 'telegraf';
 import { TelegramService } from './telegram.service';
 import { TelegramUpdate } from './telegram.update';
+import { TelegramDriverUpdate } from './telegram-driver.update';
+import { TelegramAdminUpdate } from './telegram-admin.update';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
@@ -34,7 +36,12 @@ import { ServicesModule } from '../services/services.module';
       inject: [ConfigService],
     }),
   ],
-  providers: [TelegramService, TelegramUpdate],
+  providers: [
+    TelegramService,
+    TelegramUpdate,
+    TelegramDriverUpdate,
+    TelegramAdminUpdate,
+  ],
   exports: [TelegramService, TelegrafModule],
 })
 export class TelegramModule {}
