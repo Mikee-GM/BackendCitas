@@ -1128,7 +1128,7 @@ export class TelegramUpdate {
     // Obtener información del servicio para validar si es una empleada independiente autorizándose a sí misma
     const servicio = await this.serviciosRepository.findOne({
       where: { id: serviceId },
-      relations: { empleada: true },
+      relations: { empleada: true, cliente: true },
     });
 
     if (!servicio) {
@@ -1162,9 +1162,22 @@ export class TelegramUpdate {
 
       const originalText = (ctx.callbackQuery?.message as any)?.text || '';
       const statusLabel = accept ? '🟢 ACEPTADO' : '🔴 RECHAZADO';
+
+      const options: any = { parse_mode: 'Markdown' };
+      if (accept && servicio.cliente?.telegramChatId) {
+        options.reply_markup = Markup.inlineKeyboard([
+          [
+            Markup.button.url(
+              '💬 Contactar Cliente',
+              `tg://user?id=${servicio.cliente.telegramChatId}`,
+            ),
+          ],
+        ]).reply_markup;
+      }
+
       await ctx.editMessageText(
         originalText + `\n\n📢 *Resolución:* ${statusLabel} por ${user.email}`,
-        { parse_mode: 'Markdown' },
+        options,
       );
     } catch (err: any) {
       console.error('Error al autorizar servicio desde Telegram:', err);
