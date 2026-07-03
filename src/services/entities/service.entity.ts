@@ -125,6 +125,12 @@ export class Servicios {
   @Column('text', { name: 'notas', nullable: true })
   notas: string | null;
 
+  @Column('varchar', { name: 'telegram_cliente_mensaje_id', nullable: true })
+  telegramClienteMensajeId: string | null;
+
+  @Column('varchar', { name: 'telegram_empleada_mensaje_id', nullable: true })
+  telegramEmpleadaMensajeId: string | null;
+
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',

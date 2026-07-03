@@ -122,7 +122,7 @@ export class ServicesService {
   async aceptar(id: string, jefeId: string): Promise<Servicios> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id },
-      relations: { cliente: true, empleada: true },
+      relations: { cliente: true, empleada: { usuario: true } },
     });
 
     if (!servicio) {
@@ -182,6 +182,43 @@ export class ServicesService {
       type: 'new_service',
       data: servicio,
     });
+
+    // Notificar a la empleada por Telegram si tiene telegramChatId
+    const empUser = servicio.empleada?.usuario;
+    if (
+      empUser &&
+      empUser.telegramChatId &&
+      empUser.telegramChatId !== '111111111'
+    ) {
+      try {
+        const empMsg = await this.bot.telegram.sendMessage(
+          empUser.telegramChatId,
+          `💼 *¡Servicio en Curso!* 🟢\n\n` +
+            `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+            `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+            `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+            `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '🏁 Finalizar Servicio',
+                  `finalizar_servicio:${servicio.id}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        servicio.telegramEmpleadaMensajeId = empMsg.message_id.toString();
+        await this.serviciosRepository.save(servicio);
+      } catch (telegramErr) {
+        console.error(
+          `Error al enviar notificación de Telegram a la empleada (chatId: ${empUser.telegramChatId}):`,
+          telegramErr.message || telegramErr,
+        );
+      }
+    }
 
     // 5. Enviar mensaje al grupo de choferes en Telegram
     const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;

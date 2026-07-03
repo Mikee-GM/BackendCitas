@@ -427,26 +427,50 @@ export class TelegramUpdate {
     ctx.session.step = 'AWAITING_DURATION';
     ctx.session.empleadaId = empleadaId;
 
-    await ctx.reply(
-      `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
-        `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('1 Hora', 'duracion_1'),
-            Markup.button.callback('2 Horas', 'duracion_2'),
-            Markup.button.callback('3 Horas', 'duracion_3'),
-          ],
-          [
-            Markup.button.callback('4 Horas', 'duracion_4'),
-            Markup.button.callback('5 Horas', 'duracion_5'),
-            Markup.button.callback('6 Horas', 'duracion_6'),
-          ],
-          [Markup.button.callback('8 Horas', 'duracion_8')],
-        ]),
-      },
-    );
+    try {
+      await ctx.editMessageText(
+        `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
+          `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('1 Hora', 'duracion_1'),
+              Markup.button.callback('2 Horas', 'duracion_2'),
+              Markup.button.callback('3 Horas', 'duracion_3'),
+            ],
+            [
+              Markup.button.callback('4 Horas', 'duracion_4'),
+              Markup.button.callback('5 Horas', 'duracion_5'),
+              Markup.button.callback('6 Horas', 'duracion_6'),
+            ],
+            [Markup.button.callback('8 Horas', 'duracion_8')],
+          ]),
+        },
+      );
+    } catch (err) {
+      // Fallback if we cannot edit the message (e.g. if the message was deleted or isn't editable)
+      await ctx.reply(
+        `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
+          `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('1 Hora', 'duracion_1'),
+              Markup.button.callback('2 Horas', 'duracion_2'),
+              Markup.button.callback('3 Horas', 'duracion_3'),
+            ],
+            [
+              Markup.button.callback('4 Horas', 'duracion_4'),
+              Markup.button.callback('5 Horas', 'duracion_5'),
+              Markup.button.callback('6 Horas', 'duracion_6'),
+            ],
+            [Markup.button.callback('8 Horas', 'duracion_8')],
+          ]),
+        },
+      );
+    }
   }
 
   @Action(/^duracion_(\d+(\.\d+)?)$/)
@@ -463,20 +487,37 @@ export class TelegramUpdate {
     ctx.session.duracionPactadaHoras = duracion;
     ctx.session.step = 'AWAITING_PAYMENT_METHOD';
 
-    await ctx.reply(
-      `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
-        `💳 Ahora, selecciona el método de pago:`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
-            Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
-          ],
-          [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
-        ]),
-      },
-    );
+    try {
+      await ctx.editMessageText(
+        `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
+          `💳 Ahora, selecciona el método de pago:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
+              Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
+            ],
+            [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
+          ]),
+        },
+      );
+    } catch (err) {
+      await ctx.reply(
+        `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
+          `💳 Ahora, selecciona el método de pago:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
+              Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
+            ],
+            [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
+          ]),
+        },
+      );
+    }
   }
 
   @Action(/^pago_(efectivo|tarjeta|transferencia)$/)
@@ -493,9 +534,21 @@ export class TelegramUpdate {
     ctx.session.metodoPago = metodo;
     ctx.session.step = 'AWAITING_LOCATION';
 
+    try {
+      // Editar el mensaje para remover los botones inline de pago
+      await ctx.editMessageText(
+        `⏱️ Duración registrada: *${ctx.session.duracionPactadaHoras} horas*.\n` +
+          `✅ Método de pago seleccionado: *${metodo.toUpperCase()}*.\n\n` +
+          `📍 Siguiente paso: Compartir ubicación.`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      console.error('Error al editar mensaje de pago:', err);
+    }
+
+    // Enviar el teclado nativo para compartir ubicación
     await ctx.reply(
-      `✅ Método de pago seleccionado: *${metodo.toUpperCase()}*.\n\n` +
-        `📍 Por último, necesitamos tu ubicación para registrar el servicio.\n` +
+      `📍 Por último, necesitamos tu ubicación para registrar el servicio.\n` +
         `Por favor, presiona el botón de abajo para compartir tu ubicación de manera segura:`,
       {
         parse_mode: 'Markdown',
@@ -506,6 +559,115 @@ export class TelegramUpdate {
           .resize(),
       },
     );
+  }
+
+  @Action(/^finalizar_servicio:(.+)$/)
+  async onFinalizarServicio(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { cliente: true, empleada: { usuario: true } },
+    });
+
+    if (!servicio) {
+      await ctx.answerCbQuery('❌ Servicio no encontrado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado === 'finalizado') {
+      await ctx.answerCbQuery('⚠️ Este servicio ya fue finalizado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Cambiar estado a finalizado
+    servicio.estado = 'finalizado';
+    servicio.horaFinServicio = new Date();
+    servicio.duracionFinalHoras = servicio.duracionPactadaHoras;
+    await this.serviciosRepository.save(servicio);
+
+    await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
+
+    // Volver a cargar para obtener totales calculados por triggers
+    const servicioActualizado = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { cliente: true, empleada: { usuario: true } },
+    });
+
+    const total =
+      servicioActualizado?.totalFinal || servicio.totalFinal || '0.00';
+
+    // 1. Limpieza y Resumen en chat de la empleada (Editar su mensaje actual)
+    const resumenEmpText =
+      `✅ *¡Servicio Finalizado!* 🏁\n\n` +
+      `📝 *Resumen del Servicio:*\n` +
+      `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+      `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+      `• *Total Cobrado:* $${total}\n` +
+      `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+      `¡Excelente trabajo!`;
+
+    try {
+      await ctx.editMessageText(resumenEmpText, { parse_mode: 'Markdown' });
+    } catch (err) {
+      console.error('Error al editar mensaje de la empleada:', err);
+    }
+
+    // 2. Limpieza de chat del cliente (Eliminar mensaje anterior)
+    if (servicio.cliente?.telegramChatId && servicio.telegramClienteMensajeId) {
+      try {
+        await ctx.telegram.deleteMessage(
+          servicio.cliente.telegramChatId,
+          parseInt(servicio.telegramClienteMensajeId, 10),
+        );
+      } catch (err) {
+        console.error('Error al eliminar mensaje del cliente:', err);
+      }
+    }
+
+    // 3. Enviar mensaje de resumen y botón de reinicio al cliente
+    if (servicio.cliente?.telegramChatId) {
+      const resumenCliText =
+        `🏁 *¡Tu servicio ha finalizado!* 🍰\n\n` +
+        `📝 *Resumen de tu Servicio:*\n` +
+        `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
+        `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+        `• *Total a Pagar:* $${total}\n` +
+        `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+        `¿Deseas solicitar otro servicio?`;
+
+      try {
+        await ctx.telegram.sendMessage(
+          servicio.cliente.telegramChatId,
+          resumenCliText,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '🎂 Solicitar Nuevo Servicio',
+                  'ver_menu',
+                ),
+              ],
+            ]),
+          },
+        );
+      } catch (err) {
+        console.error(
+          'Error al notificar al cliente del fin de servicio:',
+          err,
+        );
+      }
+    }
   }
 
   @On(['location', 'venue'])
@@ -682,10 +844,13 @@ export class TelegramUpdate {
 
     msgExito += `\nPronto un administrador se pondrá en contacto contigo. ¡Gracias por tu preferencia!`;
 
-    await ctx.reply(msgExito, {
+    const msg = await ctx.reply(msgExito, {
       parse_mode: 'Markdown',
       ...Markup.removeKeyboard(),
     });
+
+    nuevoServicio.telegramClienteMensajeId = msg.message_id.toString();
+    await this.serviciosRepository.save(nuevoServicio);
   }
 
   @On('text')
