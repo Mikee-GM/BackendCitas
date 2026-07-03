@@ -281,6 +281,23 @@ export class TelegramDriverUpdate {
     } catch (err) {
       console.error('Error actualizando mensaje de recogida:', err);
     }
+
+    // Notificar al cliente que la empleada va en camino
+    if (trip.servicio?.cliente?.telegramChatId) {
+      try {
+        await ctx.telegram.sendMessage(
+          trip.servicio.cliente.telegramChatId,
+          `🚗 *¡Tu servicio va en camino!* 💨\n\n` +
+            `El chofer *${chofer.nombre}* ha recogido a *${trip.servicio.empleada.nombreArtistico}* y van rumbo a tu ubicación.`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (telegramErr) {
+        console.error(
+          `Error al notificar al cliente sobre viaje en camino (chatId: ${trip.servicio.cliente.telegramChatId}):`,
+          telegramErr.message || telegramErr,
+        );
+      }
+    }
   }
 
   @Action(/^chofer_finalizo_viaje:(.+)$/)
@@ -316,7 +333,7 @@ export class TelegramDriverUpdate {
 
     const trip = await this.dataSource.getRepository(Viajes).findOne({
       where: { id: viajeId },
-      relations: { servicio: { empleada: true } },
+      relations: { servicio: { empleada: true, cliente: true } },
     });
 
     if (!trip) {
@@ -357,6 +374,23 @@ export class TelegramDriverUpdate {
       });
     } catch (err) {
       console.error('Error actualizando mensaje de finalización:', err);
+    }
+
+    // Notificar al cliente que la empleada ha llegado
+    if (trip.servicio?.cliente?.telegramChatId) {
+      try {
+        await ctx.telegram.sendMessage(
+          trip.servicio.cliente.telegramChatId,
+          `📍 *¡Tu empleada ha llegado!* 🙋‍♀️\n\n` +
+            `*${trip.servicio.empleada.nombreArtistico}* ha llegado a tu ubicación para iniciar el servicio.`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (telegramErr) {
+        console.error(
+          `Error al notificar al cliente sobre llegada (chatId: ${trip.servicio.cliente.telegramChatId}):`,
+          telegramErr.message || telegramErr,
+        );
+      }
     }
   }
 }

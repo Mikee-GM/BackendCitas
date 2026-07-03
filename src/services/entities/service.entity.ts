@@ -131,6 +131,12 @@ export class Servicios {
   @Column('varchar', { name: 'telegram_empleada_mensaje_id', nullable: true })
   telegramEmpleadaMensajeId: string | null;
 
+  @Column('integer', { name: 'calificacion', nullable: true })
+  calificacion: number | null;
+
+  @Column('text', { name: 'comentarios_calificacion', nullable: true })
+  comentariosCalificacion: string | null;
+
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',

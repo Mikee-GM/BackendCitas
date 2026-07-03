@@ -52,14 +52,14 @@ export class ServicesController {
   @UseGuards(JwtAuthGuard)
   @Post(':id/aceptar')
   aceptar(@Param('id') id: string, @Req() req: any) {
-    const jefeId = req.user.sub;
+    const jefeId = req.user.id;
     return this.servicesService.aceptar(id, jefeId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post(':id/rechazar')
   rechazar(@Param('id') id: string, @Req() req: any) {
-    const jefeId = req.user.sub;
+    const jefeId = req.user.id;
     return this.servicesService.rechazar(id, jefeId);
   }
 }

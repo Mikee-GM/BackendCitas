@@ -13,10 +13,15 @@ import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 
 interface SessionData {
-  step?: 'AWAITING_DURATION' | 'AWAITING_PAYMENT_METHOD' | 'AWAITING_LOCATION';
+  step?:
+    | 'AWAITING_DURATION'
+    | 'AWAITING_PAYMENT_METHOD'
+    | 'AWAITING_LOCATION'
+    | 'AWAITING_RATING_COMMENT';
   empleadaId?: string;
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
+  servicioIdCalificacion?: string;
 }
 
 interface BotContext extends Context {
@@ -634,7 +639,7 @@ export class TelegramUpdate {
       }
     }
 
-    // 3. Enviar mensaje de resumen y botón de reinicio al cliente
+    // 3. Enviar mensaje de resumen y solicitar calificación al cliente
     if (servicio.cliente?.telegramChatId) {
       const resumenCliText =
         `🏁 *¡Tu servicio ha finalizado!* 🍰\n\n` +
@@ -643,7 +648,7 @@ export class TelegramUpdate {
         `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
         `• *Total a Pagar:* $${total}\n` +
         `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
-        `¿Deseas solicitar otro servicio?`;
+        `Por favor, califica el servicio recibido:`;
 
       try {
         await ctx.telegram.sendMessage(
@@ -654,8 +659,26 @@ export class TelegramUpdate {
             ...Markup.inlineKeyboard([
               [
                 Markup.button.callback(
-                  '🎂 Solicitar Nuevo Servicio',
-                  'ver_menu',
+                  '⭐',
+                  `calificar_servicio:${servicio.id}:1`,
+                ),
+                Markup.button.callback(
+                  '⭐⭐',
+                  `calificar_servicio:${servicio.id}:2`,
+                ),
+                Markup.button.callback(
+                  '⭐⭐⭐',
+                  `calificar_servicio:${servicio.id}:3`,
+                ),
+              ],
+              [
+                Markup.button.callback(
+                  '⭐⭐⭐⭐',
+                  `calificar_servicio:${servicio.id}:4`,
+                ),
+                Markup.button.callback(
+                  '⭐⭐⭐⭐⭐',
+                  `calificar_servicio:${servicio.id}:5`,
                 ),
               ],
             ]),
@@ -667,6 +690,55 @@ export class TelegramUpdate {
           err,
         );
       }
+    }
+  }
+
+  @Action(/^calificar_servicio:(.+):([1-5])$/)
+  async onCalificarServicio(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+    const rating = parseInt(match[2], 10);
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
+    if (!servicio) {
+      await ctx.reply('❌ Servicio no encontrado.');
+      return;
+    }
+
+    servicio.calificacion = rating;
+    await this.serviciosRepository.save(servicio);
+
+    const stars = '⭐'.repeat(rating);
+
+    if (rating >= 3) {
+      await ctx.editMessageText(
+        `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!\n\n` +
+          `¿Deseas solicitar otro servicio?`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('🎂 Solicitar Nuevo Servicio', 'ver_menu')],
+          ]),
+        },
+      );
+    } else {
+      if (!ctx.session) {
+        ctx.session = {};
+      }
+      ctx.session.step = 'AWAITING_RATING_COMMENT';
+      ctx.session.servicioIdCalificacion = servicioId;
+
+      await ctx.editMessageText(
+        `Has calificado con ${stars} nuestro servicio.\n\n` +
+          `⚠️ *Comentario Obligatorio:*\n` +
+          `Lamentamos mucho tu insatisfacción. Por favor, escribe un comentario directamente en el chat explicándonos qué podemos mejorar:`,
+        { parse_mode: 'Markdown' },
+      );
     }
   }
 
@@ -886,6 +958,44 @@ export class TelegramUpdate {
               Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
             ],
             [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
+          ]),
+        },
+      );
+      return;
+    }
+
+    if (step === 'AWAITING_RATING_COMMENT') {
+      const text = (ctx.message as { text?: string })?.text || '';
+      const comments = text.trim();
+
+      if (!comments) {
+        await ctx.reply(
+          '❌ El comentario es obligatorio para calificaciones de 2 estrellas o menos.\n' +
+            'Por favor, indícanos qué podemos mejorar:',
+        );
+        return;
+      }
+
+      const servicioId = ctx.session?.servicioIdCalificacion;
+      if (servicioId) {
+        const servicio = await this.serviciosRepository.findOne({
+          where: { id: servicioId },
+        });
+        if (servicio) {
+          servicio.comentariosCalificacion = comments;
+          await this.serviciosRepository.save(servicio);
+        }
+      }
+
+      ctx.session = {};
+
+      await ctx.reply(
+        `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.\n\n` +
+          `¿Deseas solicitar otro servicio?`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('🎂 Solicitar Nuevo Servicio', 'ver_menu')],
           ]),
         },
       );

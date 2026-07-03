@@ -220,6 +220,23 @@ export class ServicesService {
       }
     }
 
+    // Notificar al cliente por Telegram si tiene telegramChatId
+    if (servicio.cliente?.telegramChatId) {
+      try {
+        await this.bot.telegram.sendMessage(
+          servicio.cliente.telegramChatId,
+          `🔔 *¡Tu servicio ha sido aceptado!* 🟢\n\n` +
+            `Tu servicio con la empleada *${servicio.empleada.nombreArtistico}* ha sido aprobado y el transporte ya se está coordinando.`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (telegramErr) {
+        console.error(
+          `Error al enviar notificación de aceptación al cliente (chatId: ${servicio.cliente.telegramChatId}):`,
+          telegramErr.message || telegramErr,
+        );
+      }
+    }
+
     // 5. Enviar mensaje al grupo de choferes en Telegram
     const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
     if (driversGroupId) {
