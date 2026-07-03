@@ -832,7 +832,7 @@ export class TelegramUpdate {
 
       const trip = await this.dataSource.getRepository(Viajes).findOne({
         where: { id: viajeId },
-        relations: { servicio: { empleada: true } },
+        relations: { servicio: { empleada: true, cliente: true } },
       });
 
       if (trip && trip.servicio) {
@@ -858,12 +858,249 @@ export class TelegramUpdate {
             serviceId: trip.servicio.id,
           },
         });
+
+        // Enviar información del viaje por privado al chofer
+        if (user.telegramChatId) {
+          const empLat = trip.servicio.empleada.ubicacionLat;
+          const empLng = trip.servicio.empleada.ubicacionLng;
+          let empLocationText = 'No registrada';
+          const inlineButtons: any[][] = [];
+
+          if (empLat && empLng) {
+            empLocationText = `[Ver en Google Maps](https://www.google.com/maps/search/?api=1&query=${empLat},${empLng})`;
+            inlineButtons.push([
+              Markup.button.url(
+                '🗺️ Google Maps',
+                `https://www.google.com/maps/search/?api=1&query=${empLat},${empLng}`,
+              ),
+              Markup.button.url(
+                '🚙 Waze',
+                `https://waze.com/ul?ll=${empLat},${empLng}&navigate=yes`,
+              ),
+            ]);
+          }
+
+          inlineButtons.push([
+            Markup.button.callback(
+              '🙋‍♀️ Empleada Recogida',
+              `chofer_recogida:${trip.id}`,
+            ),
+          ]);
+
+          const privateMessageText =
+            `🚗 *¡Viaje Tomado con Éxito!* 🚗\n\n` +
+            `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+            `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+            `• *Ubicación de Recogida (Empleada):* ${empLocationText}\n\n` +
+            `Por favor, presiona el botón de abajo una vez hayas recogido a la empleada.`;
+
+          try {
+            await ctx.telegram.sendMessage(
+              user.telegramChatId,
+              privateMessageText,
+              {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(inlineButtons),
+              },
+            );
+          } catch (sendErr) {
+            console.error(
+              'Error al enviar mensaje privado al chofer:',
+              sendErr,
+            );
+          }
+        }
       }
     } else {
       await ctx.answerCbQuery(
         '❌ Este viaje ya ha sido tomado por otro chofer.',
         { show_alert: true },
       );
+    }
+  }
+
+  @Action(/^chofer_recogida:(.+)$/)
+  async onChoferRecogida(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      await ctx.answerCbQuery(
+        '❌ No tienes permisos para realizar esta acción.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({
+      where: { usuarioId: user.id },
+    });
+
+    if (!chofer) {
+      await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const viajeId = match[1];
+
+    const trip = await this.dataSource.getRepository(Viajes).findOne({
+      where: { id: viajeId },
+      relations: { servicio: { cliente: true, empleada: true } },
+    });
+
+    if (!trip) {
+      await ctx.answerCbQuery('❌ Viaje no encontrado.', { show_alert: true });
+      return;
+    }
+
+    if (trip.choferId !== chofer.id) {
+      await ctx.answerCbQuery('❌ Este viaje está asignado a otro chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (trip.estado !== 'aceptado') {
+      await ctx.answerCbQuery(`❌ El viaje está en estado: ${trip.estado}`, {
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Actualizar el viaje a en_curso
+    trip.estado = 'en_curso';
+    trip.horaInicioViaje = new Date();
+    await this.dataSource.getRepository(Viajes).save(trip);
+
+    await ctx.answerCbQuery(
+      '🟢 Pasajera a bordo. Iniciando trayecto al cliente.',
+    );
+
+    // Mostrar destino del cliente con botones de navegación
+    const clientLat = trip.servicio.ubicacionClienteLat;
+    const clientLng = trip.servicio.ubicacionClienteLng;
+    let clientLocationText = 'No registrada';
+    const inlineButtons: any[][] = [];
+
+    if (clientLat && clientLng) {
+      clientLocationText = `[Ver en Google Maps](https://www.google.com/maps/search/?api=1&query=${clientLat},${clientLng})`;
+      inlineButtons.push([
+        Markup.button.url(
+          '🗺️ Google Maps',
+          `https://www.google.com/maps/search/?api=1&query=${clientLat},${clientLng}`,
+        ),
+        Markup.button.url(
+          '🚙 Waze',
+          `https://waze.com/ul?ll=${clientLat},${clientLng}&navigate=yes`,
+        ),
+      ]);
+    }
+
+    inlineButtons.push([
+      Markup.button.callback(
+        '🏁 Finalizar Viaje',
+        `chofer_finalizo_viaje:${trip.id}`,
+      ),
+    ]);
+
+    const messageText =
+      `🙋‍♀️ *¡Empleada Recogida con Éxito!* 🙋‍♀️\n\n` +
+      `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+      `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+      `• *Ubicación del Cliente (Destino):* ${clientLocationText}\n\n` +
+      `Por favor, presiona el botón de abajo una vez hayas llegado al destino final y finalizado el servicio.`;
+
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard(inlineButtons),
+      });
+    } catch (err) {
+      console.error('Error actualizando mensaje de recogida:', err);
+    }
+  }
+
+  @Action(/^chofer_finalizo_viaje:(.+)$/)
+  async onChoferFinalizoViaje(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      await ctx.answerCbQuery(
+        '❌ No tienes permisos para realizar esta acción.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({
+      where: { usuarioId: user.id },
+    });
+
+    if (!chofer) {
+      await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const viajeId = match[1];
+
+    const trip = await this.dataSource.getRepository(Viajes).findOne({
+      where: { id: viajeId },
+      relations: { servicio: { empleada: true } },
+    });
+
+    if (!trip) {
+      await ctx.answerCbQuery('❌ Viaje no encontrado.', { show_alert: true });
+      return;
+    }
+
+    if (trip.choferId !== chofer.id) {
+      await ctx.answerCbQuery('❌ Este viaje está asignado a otro chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (trip.estado !== 'en_curso') {
+      await ctx.answerCbQuery(`❌ El viaje está en estado: ${trip.estado}`, {
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Actualizar el viaje a finalizado
+    trip.estado = 'finalizado';
+    trip.horaFinViaje = new Date();
+    await this.dataSource.getRepository(Viajes).save(trip);
+
+    await ctx.answerCbQuery('🏁 Viaje finalizado con éxito.');
+
+    const messageText =
+      `✅ *¡Viaje Finalizado!* 🏁\n\n` +
+      `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+      `• *Hora Fin:* ${trip.horaFinViaje.toLocaleTimeString()}\n\n` +
+      `¡Buen trabajo! El trayecto ha sido registrado en el sistema.`;
+
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: 'Markdown',
+      });
+    } catch (err) {
+      console.error('Error actualizando mensaje de finalización:', err);
     }
   }
 
