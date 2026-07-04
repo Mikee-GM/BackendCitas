@@ -16,13 +16,13 @@ export class Viajes {
   })
   id: string;
 
-  @Column('uuid', { name: 'servicio_id', unique: true })
+  @Column('uuid', { name: 'servicio_id' })
   servicioId: string;
 
   @Column('uuid', { name: 'chofer_id', nullable: true })
   choferId: string | null;
 
-  @Column('enum', { name: 'tipo', unique: true, enum: ['ida', 'regreso'] })
+  @Column('enum', { name: 'tipo', enum: ['ida', 'regreso'] })
   tipo: 'ida' | 'regreso';
 
   @Column('enum', {

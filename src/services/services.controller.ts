@@ -13,8 +13,12 @@ import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('services')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin', 'jefe')
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
@@ -23,7 +27,6 @@ export class ServicesController {
     return this.servicesService.create(createServiceDto);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('pendientes')
   getPending() {
     return this.servicesService.getPending();
@@ -49,14 +52,12 @@ export class ServicesController {
     return this.servicesService.remove(id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post(':id/aceptar')
   aceptar(@Param('id') id: string, @Req() req: any) {
     const jefeId = req.user.id;
     return this.servicesService.aceptar(id, jefeId);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post(':id/rechazar')
   rechazar(@Param('id') id: string, @Req() req: any) {
     const jefeId = req.user.id;

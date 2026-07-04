@@ -137,6 +137,12 @@ export class Servicios {
   @Column('text', { name: 'comentarios_calificacion', nullable: true })
   comentariosCalificacion: string | null;
 
+  @Column('boolean', {
+    name: 'notificacion_extension_enviada',
+    default: false,
+  })
+  notificacionExtensionEnviada: boolean;
+
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',

@@ -36,7 +36,7 @@ import { RealtimeModule } from './realtime/realtime.module';
       database: process.env.DATABASE_NAME || 'chamba_pasteles',
       autoLoadEntities: true,
       entities: [__dirname + '/**/*.entity.js', __dirname + '/**/*.entity.ts'],
-      synchronize: false, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
+      synchronize: true, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
       migrationsRun: false,
       migrations: [__dirname + '/migrations/*{.ts,.js}'],
     }),

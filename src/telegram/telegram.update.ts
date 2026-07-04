@@ -287,7 +287,33 @@ export class TelegramUpdate {
     await ctx.reply('Catálogo de Empleadas:');
 
     for (const e of list) {
-      const caption = `*${e.nombreArtistico}*\n💰 *Tarifa:* $${e.precioBaseHora}/hr`;
+      let status = '🔴 Ocupada';
+      if (!e.disponible) {
+        const activeService = await this.serviciosRepository.findOne({
+          where: { empleadaId: e.id, estado: 'en_curso' },
+        });
+        if (activeService && activeService.horaInicioServicio) {
+          const durationMs =
+            Number(activeService.duracionPactadaHoras) * 60 * 60 * 1000;
+          const graceMs = 15 * 60 * 1000; // 15 minutes grace as requested
+          const endTime =
+            activeService.horaInicioServicio.getTime() + durationMs + graceMs;
+          const remainingMs = endTime - Date.now();
+          if (remainingMs > 0) {
+            const remainingMin = Math.ceil(remainingMs / (60 * 1000));
+            const hours = Math.floor(remainingMin / 60);
+            const minutes = remainingMin % 60;
+            const timeStr =
+              hours > 0 ? `~${hours}h ${minutes}m` : `~${minutes}m`;
+            status = `🔴 Ocupada (disp. en ${timeStr})`;
+          } else {
+            status = `🔴 Ocupada (disp. pronto)`;
+          }
+        }
+      } else {
+        status = '🟢 Disponible';
+      }
+      const caption = `*${e.nombreArtistico}* (${status})\n💰 *Tarifa:* $${e.precioBaseHora}/hr`;
       const keyboard = Markup.inlineKeyboard([
         Markup.button.callback(
           '🔍 Ver Perfil Completo',
@@ -351,7 +377,31 @@ export class TelegramUpdate {
       return;
     }
 
-    const status = empleada.disponible ? '🟢 Disponible' : '🔴 Ocupada';
+    let status = '🔴 Ocupada';
+    if (!empleada.disponible) {
+      const activeService = await this.serviciosRepository.findOne({
+        where: { empleadaId: empleada.id, estado: 'en_curso' },
+      });
+      if (activeService && activeService.horaInicioServicio) {
+        const durationMs =
+          Number(activeService.duracionPactadaHoras) * 60 * 60 * 1000;
+        const graceMs = 15 * 60 * 1000;
+        const endTime =
+          activeService.horaInicioServicio.getTime() + durationMs + graceMs;
+        const remainingMs = endTime - Date.now();
+        if (remainingMs > 0) {
+          const remainingMin = Math.ceil(remainingMs / (60 * 1000));
+          const hours = Math.floor(remainingMin / 60);
+          const minutes = remainingMin % 60;
+          const timeStr = hours > 0 ? `~${hours}h ${minutes}m` : `~${minutes}m`;
+          status = `🔴 Ocupada (disp. en ${timeStr})`;
+        } else {
+          status = `🔴 Ocupada (disp. pronto)`;
+        }
+      }
+    } else {
+      status = '🟢 Disponible';
+    }
     const caption =
       `*${empleada.nombreArtistico}*\n` +
       `Estado: ${status}\n` +
@@ -377,14 +427,18 @@ export class TelegramUpdate {
       });
     }
 
-    const hireKeyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          '🤝 Contratar',
-          `contratar_empleada:${empleada.id}`,
-        ),
-      ],
-    ]);
+    const hireKeyboard = empleada.disponible
+      ? Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '🤝 Contratar',
+              `contratar_empleada:${empleada.id}`,
+            ),
+          ],
+        ])
+      : Markup.inlineKeyboard([
+          [Markup.button.callback('🔙 Volver al Catálogo', 'ver_empleadas')],
+        ]);
 
     if (photos.length > 0) {
       try {
@@ -420,8 +474,10 @@ export class TelegramUpdate {
       where: { id: empleadaId },
     });
 
-    if (!empleada) {
-      await ctx.reply('La empleada seleccionada ya no está disponible.');
+    if (!empleada || !empleada.disponible) {
+      await ctx.reply(
+        'La empleada seleccionada no está disponible en este momento (está ocupada o inactiva).',
+      );
       return;
     }
 
@@ -599,6 +655,13 @@ export class TelegramUpdate {
     servicio.horaFinServicio = new Date();
     servicio.duracionFinalHoras = servicio.duracionPactadaHoras;
     await this.serviciosRepository.save(servicio);
+
+    // Actualizar disponibilidad de la empleada a true (disponible)
+    if (servicio.empleadaId) {
+      await this.empleadasRepository.update(servicio.empleadaId, {
+        disponible: true,
+      });
+    }
 
     await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
 
@@ -923,6 +986,71 @@ export class TelegramUpdate {
 
     nuevoServicio.telegramClienteMensajeId = msg.message_id.toString();
     await this.serviciosRepository.save(nuevoServicio);
+  }
+
+  @Action(/^extender_servicio:(.+):(.+)$/)
+  async onExtenderServicio(@Ctx() ctx: Context) {
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+    const horasAExtender = parseInt(match[2], 10);
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { empleada: { usuario: true } },
+    });
+
+    if (!servicio) {
+      await ctx.answerCbQuery('❌ Servicio no encontrado.');
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('⚠️ El servicio ya no está activo.');
+      return;
+    }
+
+    // Actualizar duracion pactada
+    const nuevaDuracion =
+      Number(servicio.duracionPactadaHoras) + horasAExtender;
+    servicio.duracionPactadaHoras = nuevaDuracion.toString();
+    // Resetear flag para que pueda volver a notificar 15 minutos antes de la nueva hora
+    servicio.notificacionExtensionEnviada = false;
+
+    await this.serviciosRepository.save(servicio);
+    await ctx.answerCbQuery('✅ Servicio extendido con éxito.');
+
+    // Volver a cargar para ver los totales actualizados por los triggers de Postgres
+    const servicioActualizado = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
+    const total = servicioActualizado?.totalFinal || servicio.totalFinal;
+
+    try {
+      await ctx.editMessageText(
+        `✅ *Servicio Extendido* ➕${horasAExtender}h\n\n` +
+          `• Nueva Duración Pactada: *${nuevaDuracion} horas*\n` +
+          `• Nuevo Total Estimado: *$${total}*\n\n` +
+          `El cambio ha sido registrado automáticamente en el sistema.`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      console.error('Error al editar mensaje de extensión:', err);
+    }
+  }
+
+  @Action(/^no_extender_servicio:(.+)$/)
+  async onNoExtenderServicio(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    try {
+      await ctx.editMessageText(
+        `👍 Entendido. El servicio finalizará en el tiempo pactado inicialmente.`,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      console.error('Error al editar mensaje de no extensión:', err);
+    }
   }
 
   @On('text')

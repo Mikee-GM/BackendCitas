@@ -9,6 +9,7 @@ import { Viajes } from '../trips/entities/trip.entity';
 import { Choferes } from '../drivers/entities/driver.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
+import { Servicios } from '../services/entities/service.entity';
 
 @Update()
 export class TelegramDriverUpdate {
@@ -359,6 +360,12 @@ export class TelegramDriverUpdate {
     trip.estado = 'finalizado';
     trip.horaFinViaje = new Date();
     await this.dataSource.getRepository(Viajes).save(trip);
+
+    // Actualizar horaInicioServicio del servicio
+    if (trip.servicio) {
+      trip.servicio.horaInicioServicio = new Date();
+      await this.dataSource.getRepository(Servicios).save(trip.servicio);
+    }
 
     await ctx.answerCbQuery('🏁 Viaje finalizado con éxito.');
 

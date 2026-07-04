@@ -4,6 +4,7 @@ import {
   ConflictException,
   Inject,
   forwardRef,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,7 +18,7 @@ import { Empleadas } from '../employees/entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 
 @Injectable()
-export class ServicesService {
+export class ServicesService implements OnModuleInit {
   constructor(
     @InjectRepository(Servicios)
     private readonly serviciosRepository: Repository<Servicios>,
@@ -158,7 +159,15 @@ export class ServicesService {
     // 1. Actualizar estado del servicio a 'en_curso'
     servicio.estado = 'en_curso';
     servicio.jefeId = jefeId;
+    servicio.horaInicioServicio = new Date();
     await this.serviciosRepository.save(servicio);
+
+    // Actualizar disponibilidad de la empleada a false (ocupada)
+    if (servicio.empleadaId) {
+      await this.serviciosRepository.manager
+        .getRepository(Empleadas)
+        .update(servicio.empleadaId, { disponible: false });
+    }
 
     // 2. Crear viaje (viaje de ida para la empleada) sin chofer asignado inicialmente
     const nuevoViaje = this.viajesRepository.create({
@@ -308,6 +317,13 @@ export class ServicesService {
     servicio.jefeId = jefeId;
     await this.serviciosRepository.save(servicio);
 
+    // Actualizar disponibilidad de la empleada a true (disponible)
+    if (servicio.empleadaId) {
+      await this.serviciosRepository.manager
+        .getRepository(Empleadas)
+        .update(servicio.empleadaId, { disponible: true });
+    }
+
     // 2. Notificar a Jefes via SSE
     this.realtimeEventsService.emitToJefes({
       type: 'service_rejected',
@@ -315,5 +331,83 @@ export class ServicesService {
     });
 
     return servicio;
+  }
+
+  onModuleInit() {
+    // Check every 60 seconds
+    setInterval(() => {
+      this.checkActiveServicesForExtension().catch((err) =>
+        console.error('Error checking active services for extension:', err),
+      );
+    }, 60000);
+  }
+
+  async checkActiveServicesForExtension() {
+    const activeServices = await this.serviciosRepository.find({
+      where: {
+        estado: 'en_curso',
+        notificacionExtensionEnviada: false,
+      },
+      relations: { empleada: { usuario: true } },
+    });
+
+    const now = Date.now();
+    for (const service of activeServices) {
+      if (
+        !service.horaInicioServicio ||
+        !service.empleada?.usuario?.telegramChatId
+      ) {
+        continue;
+      }
+
+      const durationMs = Number(service.duracionPactadaHoras) * 60 * 60 * 1000;
+      const endTime = service.horaInicioServicio.getTime() + durationMs;
+      const notificationTime = endTime - 15 * 60 * 1000; // 15 minutes before scheduled end
+
+      if (now >= notificationTime) {
+        // Mark as sent to prevent multiple triggers
+        service.notificacionExtensionEnviada = true;
+        await this.serviciosRepository.save(service);
+
+        try {
+          await this.bot.telegram.sendMessage(
+            service.empleada.usuario.telegramChatId,
+            `⏳ *Aviso de Finalización* ⏳\n\n` +
+              `Tu servicio está programado para finalizar en aproximadamente 15 minutos.\n\n` +
+              `¿Deseas extender el tiempo del servicio?`,
+            {
+              parse_mode: 'Markdown',
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    '➕ 1 Hora',
+                    `extender_servicio:${service.id}:1`,
+                  ),
+                  Markup.button.callback(
+                    '➕ 2 Horas',
+                    `extender_servicio:${service.id}:2`,
+                  ),
+                ],
+                [
+                  Markup.button.callback(
+                    '➕ 3 Horas',
+                    `extender_servicio:${service.id}:3`,
+                  ),
+                  Markup.button.callback(
+                    '❌ No extender',
+                    `no_extender_servicio:${service.id}`,
+                  ),
+                ],
+              ]),
+            },
+          );
+        } catch (err) {
+          console.error(
+            `Error sending extension prompt to employee (chatId: ${service.empleada.usuario.telegramChatId}):`,
+            err,
+          );
+        }
+      }
+    }
   }
 }

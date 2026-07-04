@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateServiceTotalTriggers1782424709584 implements MigrationInterface {
-  name = 'CreateServiceTotalTriggers1782424709584';
+export class CreateServiceTotalTriggers1783118780000 implements MigrationInterface {
+  name = 'CreateServiceTotalTriggers1783118780000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // 1. Create function to calculate total_base and total_final on servicios
