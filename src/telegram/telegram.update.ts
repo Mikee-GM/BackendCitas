@@ -17,11 +17,16 @@ interface SessionData {
     | 'AWAITING_DURATION'
     | 'AWAITING_PAYMENT_METHOD'
     | 'AWAITING_LOCATION'
-    | 'AWAITING_RATING_COMMENT';
+    | 'AWAITING_RATING_COMMENT'
+    | 'AWAITING_DURATION_ENCADENADO'
+    | 'AWAITING_PAYMENT_METHOD_ENCADENADO'
+    | 'AWAITING_LOCATION_ENCADENADO';
   empleadaId?: string;
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
   servicioIdCalificacion?: string;
+  /** ID del servicio en_curso al que se encadenará la nueva cita */
+  servicioPrevioId?: string;
 }
 
 interface BotContext extends Context {
@@ -61,6 +66,10 @@ export class TelegramUpdate {
       await ctx.reply(
         `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
           `¿Qué deseas hacer hoy?`,
+        Markup.keyboard([
+          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
+          ['📖 Ver ayuda'],
+        ]).resize(),
       );
       return;
     }
@@ -88,21 +97,15 @@ export class TelegramUpdate {
 
     await ctx.reply(
       `¡Hola ${fullName}! Bienvenido al sistema de pastelería.\n` +
-        `Tu ID de Telegram registrado es: ${telegramId}\n\n` +
-        `¿Qué deseas hacer hoy?`,
-      Markup.inlineKeyboard([
-        [
-          Markup.button.callback('🎂 Ver Menú', 'ver_menu'),
-          Markup.button.callback('👩‍🍳 Ver Empleadas', 'ver_empleadas'),
-        ],
-        [
-          Markup.button.callback('📖 Ver Ayuda', 'ver_ayuda'),
-          Markup.button.url(
-            '🌐 Visitar Web',
-            'https://tu-sitio-pasteleria.com',
-          ),
-        ],
-      ]),
+        `¿Qué deseas hacer hoy?\n\n` +
+        `🌐 *Visita nuestra web:* https://tu-sitio-pasteleria.com`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.keyboard([
+          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
+          ['📖 Ver ayuda'],
+        ]).resize(),
+      },
     );
   }
 
@@ -437,6 +440,12 @@ export class TelegramUpdate {
           ],
         ])
       : Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '📅 Reservar Siguiente Turno',
+              `reservar_siguiente:${empleada.id}`,
+            ),
+          ],
           [Markup.button.callback('🔙 Volver al Catálogo', 'ver_empleadas')],
         ]);
 
@@ -532,6 +541,140 @@ export class TelegramUpdate {
         },
       );
     }
+  }
+
+  // ─── FLUJO CITA ENCADENADA ──────────────────────────────────────────────────
+
+  @Action(/^reservar_siguiente:(.+)$/)
+  async onReservarSiguiente(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const empleadaId = match[1];
+
+    const empleada = await this.empleadasRepository.findOne({
+      where: { id: empleadaId },
+    });
+
+    if (!empleada) {
+      await ctx.reply('La empleada seleccionada ya no existe en el sistema.');
+      return;
+    }
+
+    if (empleada.disponible) {
+      // Race condition: she just became available – redirect to normal flow
+      await ctx.reply(
+        `✅ ¡${empleada.nombreArtistico} acaba de quedar disponible! Puedes contratarla directamente.`,
+        Markup.inlineKeyboard([
+          Markup.button.callback(
+            '🤝 Contratar ahora',
+            `contratar_empleada:${empleada.id}`,
+          ),
+        ]),
+      );
+      return;
+    }
+
+    // Find her active service to link the chain
+    const servicioActivo =
+      await this.servicesService.findServicioActivoDeEmpleada(empleadaId);
+    if (!servicioActivo) {
+      await ctx.reply(
+        '⚠️ No se encontró un servicio activo para esta empleada. Por favor, intenta más tarde.',
+      );
+      return;
+    }
+
+    if (!ctx.session) ctx.session = {};
+    ctx.session.step = 'AWAITING_DURATION_ENCADENADO';
+    ctx.session.empleadaId = empleadaId;
+    ctx.session.servicioPrevioId = servicioActivo.id;
+
+    const horaEstimada = servicioActivo.horaInicioServicio
+      ? new Date(
+          servicioActivo.horaInicioServicio.getTime() +
+            Number(servicioActivo.duracionPactadaHoras) * 60 * 60 * 1000,
+        ).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+      : 'próximamente';
+
+    await ctx.reply(
+      `📅 *Reservar Siguiente Turno con ${empleada.nombreArtistico}*\n\n` +
+        `⏰ Hora de inicio estimada: *${horaEstimada}* (puede variar si la empleada extiende su servicio actual)\n\n` +
+        `¿Cuántas horas necesitas?`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('1 Hora', 'enc_duracion_1'),
+            Markup.button.callback('2 Horas', 'enc_duracion_2'),
+            Markup.button.callback('3 Horas', 'enc_duracion_3'),
+          ],
+          [
+            Markup.button.callback('4 Horas', 'enc_duracion_4'),
+            Markup.button.callback('5 Horas', 'enc_duracion_5'),
+            Markup.button.callback('6 Horas', 'enc_duracion_6'),
+          ],
+          [Markup.button.callback('8 Horas', 'enc_duracion_8')],
+        ]),
+      },
+    );
+  }
+
+  @Action(/^enc_duracion_(\d+(\.\d+)?)$/)
+  async onEncDuracion(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    if (ctx.session?.step !== 'AWAITING_DURATION_ENCADENADO') {
+      await ctx.reply('No hay ningún proceso de reserva activo.');
+      return;
+    }
+    const match = (ctx as any).match;
+    const duracion = parseFloat(match[1]);
+    ctx.session.duracionPactadaHoras = duracion;
+    ctx.session.step = 'AWAITING_PAYMENT_METHOD_ENCADENADO';
+
+    await ctx.reply(
+      `⏱️ Duración registrada: *${duracion} horas*.\n\n💳 Selecciona el método de pago:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('💵 Efectivo', 'enc_pago_efectivo'),
+            Markup.button.callback('💳 Tarjeta', 'enc_pago_tarjeta'),
+          ],
+          [
+            Markup.button.callback(
+              '🏦 Transferencia',
+              'enc_pago_transferencia',
+            ),
+          ],
+        ]),
+      },
+    );
+  }
+
+  @Action(/^enc_pago_(efectivo|tarjeta|transferencia)$/)
+  async onEncPago(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    if (ctx.session?.step !== 'AWAITING_PAYMENT_METHOD_ENCADENADO') {
+      await ctx.reply('No hay ningún proceso de reserva activo.');
+      return;
+    }
+    const match = (ctx as any).match;
+    const metodo = match[1] as 'efectivo' | 'tarjeta' | 'transferencia';
+    ctx.session.metodoPago = metodo;
+    ctx.session.step = 'AWAITING_LOCATION_ENCADENADO';
+
+    await ctx.reply(
+      `✅ Método de pago: *${metodo.toUpperCase()}*.\n\n📍 Por último, comparte tu ubicación:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.keyboard([
+          [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+        ])
+          .oneTime()
+          .resize(),
+      },
+    );
   }
 
   @Action(/^duracion_(\d+(\.\d+)?)$/)
@@ -754,6 +897,42 @@ export class TelegramUpdate {
         );
       }
     }
+
+    // 4. Notificar a clientes con citas encadenadas que su turno está próximo
+    //    (el trigger de PostgreSQL ya cambia el estado a 'pendiente' automáticamente)
+    try {
+      const serviciosEncadenados = await this.serviciosRepository.find({
+        where: {
+          servicioPrevioId: servicioId,
+          estado: 'pendiente' as any, // just activated by PG trigger
+        },
+        relations: { cliente: true, empleada: true },
+        order: { createdAt: 'ASC' },
+      });
+
+      for (const enc of serviciosEncadenados) {
+        if (!enc.cliente?.telegramChatId) continue;
+        try {
+          await ctx.telegram.sendMessage(
+            enc.cliente.telegramChatId,
+            `🟢 *¡Tu turno está activo!*\n\n` +
+              `La empleada *${servicio.empleada?.nombreArtistico || ''}* acaba de quedar libre.\n` +
+              `Tu servicio ha pasado a lista de espera de aprobación. Pronto un administrador lo confirmará.`,
+            { parse_mode: 'Markdown' },
+          );
+        } catch (tgErr) {
+          console.error(
+            `Error notificando cliente encadenado activado (chatId: ${enc.cliente.telegramChatId}):`,
+            tgErr,
+          );
+        }
+      }
+    } catch (encErr) {
+      console.error(
+        'Error al procesar notificaciones de cadena al finalizar:',
+        encErr,
+      );
+    }
   }
 
   @Action(/^calificar_servicio:(.+):([1-5])$/)
@@ -780,14 +959,14 @@ export class TelegramUpdate {
 
     if (rating >= 3) {
       await ctx.editMessageText(
-        `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!\n\n` +
-          `¿Deseas solicitar otro servicio?`,
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('🎂 Solicitar Nuevo Servicio', 'ver_menu')],
-          ]),
-        },
+        `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!`,
+      );
+      await ctx.reply(
+        'Selecciona una opción:',
+        Markup.keyboard([
+          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
+          ['📖 Ver ayuda'],
+        ]).resize(),
       );
     } else {
       if (!ctx.session) {
@@ -861,23 +1040,28 @@ export class TelegramUpdate {
       }
     }
 
-    // Si no es personal, seguir el flujo de cliente para contratación
-    if (ctx.session?.step !== 'AWAITING_LOCATION') {
+    // Si no es personal, continuar flujo de cliente
+    const step = ctx.session?.step;
+    if (
+      step !== 'AWAITING_LOCATION' &&
+      step !== 'AWAITING_LOCATION_ENCADENADO'
+    ) {
       await ctx.reply(
         'Por favor, inicia la contratación de una empleada desde el catálogo primero.',
       );
       return;
     }
 
-    const { empleadaId, duracionPactadaHoras, metodoPago } = ctx.session || {};
+    const isEncadenado = step === 'AWAITING_LOCATION_ENCADENADO';
+
+    const { empleadaId, duracionPactadaHoras, metodoPago, servicioPrevioId } =
+      ctx.session || {};
 
     if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
       await ctx.reply(
         '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
       );
-      if (ctx.session) {
-        ctx.session = {};
-      }
+      if (ctx.session) ctx.session = {};
       return;
     }
 
@@ -923,6 +1107,89 @@ export class TelegramUpdate {
       jefeId = jefe.id;
     }
 
+    // ─── FLUJO ENCADENADO ───────────────────────────────────────────────────
+    if (isEncadenado) {
+      const nuevoServicioEnc = this.serviciosRepository.create({
+        clienteId: client.id,
+        empleadaId: empleada.id,
+        jefeId: jefeId,
+        duracionPactadaHoras: duracionPactadaHoras.toString(),
+        metodoPago: metodoPago,
+        ubicacionClienteLat: lat,
+        ubicacionClienteLng: lng,
+        precioBaseHoraPactado: empleada.precioBaseHora.toString(),
+        estado: 'pendiente_encadenado',
+        notas: notasUbicacion,
+        servicioPrevioId: servicioPrevioId || null,
+      });
+      await this.serviciosRepository.save(nuevoServicioEnc);
+
+      // Calculate estimated start time from the active service
+      let horaEstimadaStr = 'próximamente';
+      if (servicioPrevioId) {
+        const servicioActivo = await this.serviciosRepository.findOne({
+          where: { id: servicioPrevioId },
+        });
+        if (servicioActivo?.horaInicioServicio) {
+          const estimada = new Date(
+            servicioActivo.horaInicioServicio.getTime() +
+              Number(servicioActivo.duracionPactadaHoras) * 60 * 60 * 1000,
+          );
+          // Save to the new chained service
+          nuevoServicioEnc.horaInicioEstimada = estimada;
+          await this.serviciosRepository.save(nuevoServicioEnc);
+          horaEstimadaStr = estimada.toLocaleTimeString('es-MX', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+        }
+      }
+
+      ctx.session = {};
+
+      let msgEnc =
+        `📅 *¡Cita Encadenada Registrada!*\n\n` +
+        `📝 *Resumen:*\n` +
+        `• *Empleada:* ${empleada.nombreArtistico}\n` +
+        `• *Duración:* ${duracionPactadaHoras} horas\n` +
+        `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+        `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
+        `• *Inicio estimado:* ${horaEstimadaStr}\n\n` +
+        `⏳ Tu cita está en la lista de espera. Te avisaremos tan pronto la empleada quede libre.\n` +
+        `Puedes cancelar esta reserva presionando el botón de abajo:`;
+
+      if (notasUbicacion) {
+        msgEnc += `\n• *Ubicación:* ${notasUbicacion}`;
+      }
+
+      const msgEnviadoEnc = await ctx.reply(msgEnc, {
+        parse_mode: 'Markdown',
+        ...Markup.removeKeyboard(),
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '❌ Cancelar esta Reserva',
+              `cancelar_encadenado:${nuevoServicioEnc.id}`,
+            ),
+          ],
+        ]),
+      });
+
+      nuevoServicioEnc.telegramClienteMensajeId =
+        msgEnviadoEnc.message_id.toString();
+      await this.serviciosRepository.save(nuevoServicioEnc);
+
+      // Notify jefe of new chained service
+      try {
+        await this.telegramService.notifyJefesNewService(nuevoServicioEnc.id);
+      } catch (err) {
+        console.error('Error notificando jefe sobre cita encadenada:', err);
+      }
+
+      return;
+    }
+
+    // ─── FLUJO NORMAL ────────────────────────────────────────────────────────
     const nuevoServicio = this.serviciosRepository.create({
       clienteId: client.id,
       empleadaId: empleada.id,
@@ -949,7 +1216,6 @@ export class TelegramUpdate {
         data: serviceWithRelations,
       });
 
-      // Enviar notificación a Telegram usando TelegramService
       try {
         await this.telegramService.notifyJefesNewService(
           serviceWithRelations.id,
@@ -1038,6 +1304,107 @@ export class TelegramUpdate {
     } catch (err) {
       console.error('Error al editar mensaje de extensión:', err);
     }
+
+    // Notificar a los clientes de los servicios encadenados que la hora estimada cambió
+    try {
+      const serviciosEncadenados = await this.serviciosRepository.find({
+        where: { servicioPrevioId: servicioId, estado: 'pendiente_encadenado' },
+        relations: { cliente: true },
+        order: { createdAt: 'ASC' },
+      });
+
+      let horaBase = servicio.horaInicioServicio
+        ? new Date(
+            servicio.horaInicioServicio.getTime() +
+              nuevaDuracion * 60 * 60 * 1000,
+          )
+        : null;
+
+      for (const enc of serviciosEncadenados) {
+        if (!enc.cliente?.telegramChatId) continue;
+
+        const horaEstimadaStr = horaBase
+          ? horaBase.toLocaleTimeString('es-MX', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : 'próximamente';
+
+        try {
+          await ctx.telegram.sendMessage(
+            enc.cliente.telegramChatId,
+            `⚠️ *Actualización de tu Cita Reservada*\n\n` +
+              `La empleada *${servicio.empleada?.nombreArtistico || ''}* extendió su servicio actual.\n` +
+              `• Nueva hora de inicio estimada para tu cita: *${horaEstimadaStr}*\n\n` +
+              `Te avisaremos cuando esté lista para atenderte.`,
+            { parse_mode: 'Markdown' },
+          );
+        } catch (tgErr) {
+          console.error(
+            `Error notificando cliente encadenado (chatId: ${enc.cliente.telegramChatId}):`,
+            tgErr,
+          );
+        }
+
+        // Advance the window for next service in queue
+        if (horaBase) {
+          horaBase = new Date(
+            horaBase.getTime() +
+              Number(enc.duracionPactadaHoras) * 60 * 60 * 1000,
+          );
+        }
+      }
+    } catch (encErr) {
+      console.error(
+        'Error al notificar clientes encadenados de extensión:',
+        encErr,
+      );
+    }
+  }
+
+  @Action(/^cancelar_encadenado:(.+)$/)
+  async onCancelarEncadenado(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    // Find the client
+    const client = await this.clientesRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!client) {
+      await ctx.reply('❌ Cliente no encontrado.');
+      return;
+    }
+
+    try {
+      await this.servicesService.cancelarServicioEncadenado(
+        servicioId,
+        client.id,
+      );
+
+      try {
+        await ctx.editMessageText(
+          `❌ *Reserva Cancelada*\n\nTu cita encadenada ha sido cancelada exitosamente. Puedes volver al catálogo para solicitar una nueva.`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('👩‍🍳 Ver Catálogo', 'ver_empleadas')],
+            ]),
+          },
+        );
+      } catch (editErr) {
+        await ctx.reply(`❌ Reserva cancelada exitosamente.`);
+      }
+    } catch (err: any) {
+      await ctx.reply(
+        `❌ No se pudo cancelar la reserva: ${err?.message || 'Error desconocido'}`,
+      );
+    }
   }
 
   @Action(/^no_extender_servicio:(.+)$/)
@@ -1057,6 +1424,27 @@ export class TelegramUpdate {
   async onMessage(@Ctx() ctx: BotContext) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
+
+    const text = (ctx.message as { text?: string })?.text || '';
+    const cleanText = text.trim().toLowerCase();
+
+    if (
+      cleanText.includes('volver al menu') ||
+      cleanText.includes('volver al menú')
+    ) {
+      ctx.session = {};
+      return this.onStart(ctx);
+    }
+
+    if (cleanText.includes('ver empleadas')) {
+      ctx.session = {};
+      return this.listEmpleadas(ctx);
+    }
+
+    if (cleanText.includes('ver ayuda') || cleanText.includes('ayuda')) {
+      ctx.session = {};
+      return this.onHelp(ctx);
+    }
 
     const step = ctx.session?.step;
 
@@ -1118,14 +1506,11 @@ export class TelegramUpdate {
       ctx.session = {};
 
       await ctx.reply(
-        `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.\n\n` +
-          `¿Deseas solicitar otro servicio?`,
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('🎂 Solicitar Nuevo Servicio', 'ver_menu')],
-          ]),
-        },
+        `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.`,
+        Markup.keyboard([
+          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
+          ['📖 Ver ayuda'],
+        ]).resize(),
       );
       return;
     }

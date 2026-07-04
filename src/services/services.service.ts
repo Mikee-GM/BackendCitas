@@ -132,7 +132,9 @@ export class ServicesService implements OnModuleInit {
 
     if (servicio.estado !== 'pendiente') {
       throw new ConflictException(
-        'El servicio ya no está pendiente de aprobación',
+        servicio.estado === 'pendiente_encadenado'
+          ? 'Este servicio está en lista de espera encadenada y no puede aprobarse directamente. Se activará automáticamente cuando el servicio previo de la empleada finalice.'
+          : 'El servicio ya no está pendiente de aprobación',
       );
     }
 
@@ -341,6 +343,53 @@ export class ServicesService implements OnModuleInit {
     }, 60000);
   }
 
+  /**
+   * Devuelve el servicio actualmente en_curso de una empleada, si existe.
+   */
+  async findServicioActivoDeEmpleada(
+    empleadaId: string,
+  ): Promise<Servicios | null> {
+    return this.serviciosRepository.findOne({
+      where: { empleadaId, estado: 'en_curso' },
+      order: { horaInicioServicio: 'DESC' },
+    });
+  }
+
+  /**
+   * Cancela un servicio en estado pendiente_encadenado.
+   * Solo el cliente propietario puede cancelarlo y solo mientras no haya iniciado.
+   */
+  async cancelarServicioEncadenado(
+    servicioId: string,
+    clienteId: string,
+  ): Promise<{ cancelled: boolean }> {
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
+    if (!servicio) {
+      throw new NotFoundException('Servicio encadenado no encontrado');
+    }
+
+    if (servicio.clienteId !== clienteId) {
+      throw new ConflictException(
+        'No tienes permiso para cancelar este servicio',
+      );
+    }
+
+    if (servicio.estado !== 'pendiente_encadenado') {
+      throw new ConflictException(
+        `El servicio no puede cancelarse porque ya está en estado '${servicio.estado}'`,
+      );
+    }
+
+    servicio.estado = 'cancelado';
+    servicio.servicioPrevioId = null;
+    await this.serviciosRepository.save(servicio);
+
+    return { cancelled: true };
+  }
+
   async checkActiveServicesForExtension() {
     const activeServices = await this.serviciosRepository.find({
       where: {
@@ -352,6 +401,13 @@ export class ServicesService implements OnModuleInit {
 
     const now = Date.now();
     for (const service of activeServices) {
+      // Solo notificar si el metodo de pago es tarjeta o transferencia
+      if (
+        service.metodoPago !== 'tarjeta' &&
+        service.metodoPago !== 'transferencia'
+      ) {
+        continue;
+      }
       if (
         !service.horaInicioServicio ||
         !service.empleada?.usuario?.telegramChatId

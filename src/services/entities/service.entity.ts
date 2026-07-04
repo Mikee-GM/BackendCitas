@@ -117,10 +117,21 @@ export class Servicios {
 
   @Column('enum', {
     name: 'estado',
-    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
+    enum: [
+      'pendiente',
+      'en_curso',
+      'finalizado',
+      'cancelado',
+      'pendiente_encadenado',
+    ],
     default: 'pendiente',
   })
-  estado: 'pendiente' | 'en_curso' | 'finalizado' | 'cancelado';
+  estado:
+    | 'pendiente'
+    | 'en_curso'
+    | 'finalizado'
+    | 'cancelado'
+    | 'pendiente_encadenado';
 
   @Column('text', { name: 'notas', nullable: true })
   notas: string | null;
@@ -142,6 +153,17 @@ export class Servicios {
     default: false,
   })
   notificacionExtensionEnviada: boolean;
+
+  /** ID del servicio que debe terminar antes de que este pueda iniciar (cita encadenada) */
+  @Column('uuid', { name: 'servicio_previo_id', nullable: true })
+  servicioPrevioId: string | null;
+
+  /** Estimación dinámica de cuándo iniciará este servicio (actualizada por trigger al extenderse el previo) */
+  @Column('timestamp with time zone', {
+    name: 'hora_inicio_estimada',
+    nullable: true,
+  })
+  horaInicioEstimada: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
@@ -199,4 +221,16 @@ export class Servicios {
 
   @OneToMany(() => Viajes, (viajes) => viajes.servicio)
   viajes: Viajes[];
+
+  /** Servicio previo al que está encadenado este (si aplica) */
+  @ManyToOne(() => Servicios, (s) => s.serviciosEncadenados, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn([{ name: 'servicio_previo_id', referencedColumnName: 'id' }])
+  servicioPrevio: Servicios | null;
+
+  /** Servicios que están en cola esperando que este termine */
+  @OneToMany(() => Servicios, (s) => s.servicioPrevio)
+  serviciosEncadenados: Servicios[];
 }
