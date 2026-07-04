@@ -159,7 +159,6 @@ export class ServicesService implements OnModuleInit {
     // 1. Actualizar estado del servicio a 'en_curso'
     servicio.estado = 'en_curso';
     servicio.jefeId = jefeId;
-    servicio.horaInicioServicio = new Date();
     await this.serviciosRepository.save(servicio);
 
     // Actualizar disponibilidad de la empleada a false (ocupada)
