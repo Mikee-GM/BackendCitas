@@ -3,6 +3,7 @@ import {
   Entity,
   Index,
   JoinColumn,
+  ManyToOne,
   OneToMany,
   OneToOne,
 } from 'typeorm';
@@ -10,6 +11,7 @@ import { EmpleadaFotos } from '../../employee-photos/entities/employee-photo.ent
 import { Usuarios } from '../../users/entities/user.entity';
 import { ExtrasCatalogo } from '../../catalog-extras/entities/catalog-extra.entity';
 import { Servicios } from '../../services/entities/service.entity';
+import { Apartments } from '../../apartments/entities/apartment.entity';
 
 @Index('idx_empleadas_catalogo_activo', ['catalogoActivo'], {})
 @Index('idx_empleadas_disponible', ['disponible'], {})
@@ -105,4 +107,13 @@ export class Empleadas {
 
   @OneToMany(() => Servicios, (servicios) => servicios.empleada)
   servicios: Servicios[];
+
+  @Column('uuid', { name: 'apartment_id', nullable: true })
+  apartmentId: string | null;
+
+  @ManyToOne(() => Apartments, (apartments) => apartments.empleadas, {
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn([{ name: 'apartment_id', referencedColumnName: 'id' }])
+  apartment: Apartments;
 }

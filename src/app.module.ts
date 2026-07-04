@@ -19,6 +19,7 @@ import { TelegramConversationsModule } from './telegram-conversations/telegram-c
 import { EmployeePhotosModule } from './employee-photos/employee-photos.module';
 import { AuthModule } from './auth/auth.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ApartmentsModule } from './apartments/apartments.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ClientAlertsModule,
     TelegramConversationsModule,
     EmployeePhotosModule,
+    ApartmentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
