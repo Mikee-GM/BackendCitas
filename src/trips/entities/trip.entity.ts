@@ -39,6 +39,7 @@ export class Viajes {
     enum: [
       'notificado',
       'aceptado',
+      'llegado',
       'en_curso',
       'finalizado',
       'rechazado',
@@ -49,6 +50,7 @@ export class Viajes {
   estado:
     | 'notificado'
     | 'aceptado'
+    | 'llegado'
     | 'en_curso'
     | 'finalizado'
     | 'rechazado'

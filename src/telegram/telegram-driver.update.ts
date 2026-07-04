@@ -89,7 +89,7 @@ export class TelegramDriverUpdate {
 
       const trip = await this.dataSource.getRepository(Viajes).findOne({
         where: { id: viajeId },
-        relations: { servicio: { empleada: true, cliente: true } },
+        relations: { servicio: { empleada: { usuario: true }, cliente: true } },
       });
 
       if (trip && trip.servicio) {
@@ -116,6 +116,40 @@ export class TelegramDriverUpdate {
           },
         });
 
+        // Notificar a la empleada que el chofer va en camino con sus datos y datos de vehículo
+        if (trip.servicio.empleada?.usuario?.telegramChatId) {
+          const vehiculoInfo = [
+            chofer.vehiculoMarca ? `• *Marca:* ${chofer.vehiculoMarca}` : null,
+            chofer.vehiculoModelo
+              ? `• *Modelo:* ${chofer.vehiculoModelo}`
+              : null,
+            chofer.vehiculoColor ? `• *Color:* ${chofer.vehiculoColor}` : null,
+            chofer.vehiculoPlaca ? `• *Placa:* ${chofer.vehiculoPlaca}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n');
+
+          const employeeNotificationText =
+            `🚗 *¡Tu chofer va en camino!* 💨\n\n` +
+            `El chofer *${chofer.nombre}* ha aceptado tu viaje y se dirige a tu ubicación.\n\n` +
+            `*Datos del Chofer:*\n` +
+            `• *Nombre:* ${chofer.nombre}\n` +
+            `• *Teléfono:* ${chofer.telefono}\n\n` +
+            (vehiculoInfo
+              ? `*Datos del Vehículo:*\n${vehiculoInfo}\n`
+              : `*Datos del Vehículo:* No registrados\n`);
+
+          try {
+            await ctx.telegram.sendMessage(
+              trip.servicio.empleada.usuario.telegramChatId,
+              employeeNotificationText,
+              { parse_mode: 'Markdown' },
+            );
+          } catch (sendErr) {
+            console.error('Error al notificar a la empleada:', sendErr);
+          }
+        }
+
         // Enviar información del viaje por privado al chofer
         if (user.telegramChatId) {
           const empLat = trip.servicio.empleada.ubicacionLat;
@@ -139,8 +173,8 @@ export class TelegramDriverUpdate {
 
           inlineButtons.push([
             Markup.button.callback(
-              '🙋‍♀️ Empleada Recogida',
-              `chofer_recogida:${trip.id}`,
+              '📍 He Llegado con la Empleada',
+              `chofer_llegado:${trip.id}`,
             ),
           ]);
 
@@ -149,7 +183,7 @@ export class TelegramDriverUpdate {
             `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
             `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
             `• *Ubicación de Recogida (Empleada):* ${empLocationText}\n\n` +
-            `Por favor, presiona el botón de abajo una vez hayas recogido a la empleada.`;
+            `Por favor, presiona el botón de abajo una vez hayas llegado con la empleada.`;
 
           try {
             await ctx.telegram.sendMessage(
@@ -173,6 +207,147 @@ export class TelegramDriverUpdate {
         '❌ Este viaje ya ha sido tomado por otro chofer.',
         { show_alert: true },
       );
+    }
+  }
+
+  @Action(/^chofer_llegado:(.+)$/)
+  async onChoferLlegado(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      await ctx.answerCbQuery(
+        '❌ No tienes permisos para realizar esta acción.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({
+      where: { usuarioId: user.id },
+    });
+
+    if (!chofer) {
+      await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    const match = (ctx as any).match;
+    const viajeId = match[1];
+
+    const trip = await this.dataSource.getRepository(Viajes).findOne({
+      where: { id: viajeId },
+      relations: { servicio: { cliente: true, empleada: { usuario: true } } },
+    });
+
+    if (!trip) {
+      await ctx.answerCbQuery('❌ Viaje no encontrado.', { show_alert: true });
+      return;
+    }
+
+    if (trip.choferId !== chofer.id) {
+      await ctx.answerCbQuery('❌ Este viaje está asignado a otro chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (trip.estado !== 'aceptado') {
+      await ctx.answerCbQuery(`❌ El viaje está en estado: ${trip.estado}`, {
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Actualizar el viaje a llegado
+    trip.estado = 'llegado';
+    await this.dataSource.getRepository(Viajes).save(trip);
+
+    await ctx.answerCbQuery('📍 Has llegado con la empleada.');
+
+    // Notificar a la empleada que el chofer ha llegado con la info de identificación
+    if (trip.servicio?.empleada?.usuario?.telegramChatId) {
+      const vehiculoInfo = [
+        chofer.vehiculoMarca ? `• *Marca:* ${chofer.vehiculoMarca}` : null,
+        chofer.vehiculoModelo ? `• *Modelo:* ${chofer.vehiculoModelo}` : null,
+        chofer.vehiculoColor ? `• *Color:* ${chofer.vehiculoColor}` : null,
+        chofer.vehiculoPlaca ? `• *Placa:* ${chofer.vehiculoPlaca}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const msgText =
+        `📍 *¡Tu chofer ha llegado!* 🚗\n\n` +
+        `El chofer *${chofer.nombre}* ya está fuera en el punto de recogida.\n\n` +
+        `*Datos de Identificación del Chofer:*\n` +
+        `• *Nombre:* ${chofer.nombre}\n` +
+        `• *Teléfono:* ${chofer.telefono}\n\n` +
+        (vehiculoInfo
+          ? `*Datos del Vehículo:*\n${vehiculoInfo}\n`
+          : `*Datos del Vehículo:* No registrados\n`) +
+        `Por favor, reúnete con él para iniciar el viaje.`;
+
+      try {
+        await ctx.telegram.sendMessage(
+          trip.servicio.empleada.usuario.telegramChatId,
+          msgText,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (telegramErr) {
+        console.error(
+          `Error al notificar a la empleada sobre la llegada (chatId: ${trip.servicio.empleada.usuario.telegramChatId}):`,
+          telegramErr.message || telegramErr,
+        );
+      }
+    }
+
+    // Actualizar el mensaje del chofer con el botón de "Empleada Recogida"
+    const empLat = trip.servicio.empleada.ubicacionLat;
+    const empLng = trip.servicio.empleada.ubicacionLng;
+    let empLocationText = 'No registrada';
+    const inlineButtons: any[][] = [];
+
+    if (empLat && empLng) {
+      empLocationText = `[Ver en Google Maps](https://www.google.com/maps/search/?api=1&query=${empLat},${empLng})`;
+      inlineButtons.push([
+        Markup.button.url(
+          '🗺️ Google Maps',
+          `https://www.google.com/maps/search/?api=1&query=${empLat},${empLng}`,
+        ),
+        Markup.button.url(
+          '🚙 Waze',
+          `https://waze.com/ul?ll=${empLat},${empLng}&navigate=yes`,
+        ),
+      ]);
+    }
+
+    inlineButtons.push([
+      Markup.button.callback(
+        '🙋‍♀️ Empleada Recogida',
+        `chofer_recogida:${trip.id}`,
+      ),
+    ]);
+
+    const messageText =
+      `🚗 *¡Has llegado al punto de recogida!* 📍\n\n` +
+      `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+      `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+      `• *Ubicación de Recogida (Empleada):* ${empLocationText}\n\n` +
+      `Una vez que la empleada suba a bordo, presiona el botón de abajo para iniciar el viaje hacia el cliente.`;
+
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard(inlineButtons),
+      });
+    } catch (err) {
+      console.error('Error actualizando mensaje de chofer_llegado:', err);
     }
   }
 
@@ -224,7 +399,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    if (trip.estado !== 'aceptado') {
+    if (trip.estado !== 'llegado' && trip.estado !== 'aceptado') {
       await ctx.answerCbQuery(`❌ El viaje está en estado: ${trip.estado}`, {
         show_alert: true,
       });

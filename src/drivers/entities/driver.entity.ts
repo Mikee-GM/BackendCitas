@@ -61,6 +61,34 @@ export class Choferes {
   })
   createdAt: Date;
 
+  @Column('character varying', {
+    name: 'vehiculo_marca',
+    length: 255,
+    nullable: true,
+  })
+  vehiculoMarca: string | null;
+
+  @Column('character varying', {
+    name: 'vehiculo_modelo',
+    length: 255,
+    nullable: true,
+  })
+  vehiculoModelo: string | null;
+
+  @Column('character varying', {
+    name: 'vehiculo_color',
+    length: 255,
+    nullable: true,
+  })
+  vehiculoColor: string | null;
+
+  @Column('character varying', {
+    name: 'vehiculo_placa',
+    length: 50,
+    nullable: true,
+  })
+  vehiculoPlaca: string | null;
+
   @OneToOne(() => Usuarios, (usuarios) => usuarios.choferes, {
     onDelete: 'CASCADE',
   })

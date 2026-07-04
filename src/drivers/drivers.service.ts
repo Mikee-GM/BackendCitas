@@ -31,6 +31,10 @@ export class DriversService {
       disponible,
       ubicacionLat,
       ubicacionLng,
+      vehiculoMarca,
+      vehiculoModelo,
+      vehiculoColor,
+      vehiculoPlaca,
     } = createDriverDto;
 
     // 1. Validar que el email no esté registrado
@@ -66,6 +70,10 @@ export class DriversService {
         disponible: disponible ?? false,
         ubicacionLat,
         ubicacionLng,
+        vehiculoMarca: vehiculoMarca || null,
+        vehiculoModelo: vehiculoModelo || null,
+        vehiculoColor: vehiculoColor || null,
+        vehiculoPlaca: vehiculoPlaca || null,
       });
       const choferGuardado = await manager.save(Choferes, nuevoChofer);
 

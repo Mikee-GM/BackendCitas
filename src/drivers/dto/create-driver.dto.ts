@@ -48,4 +48,32 @@ export class CreateDriverDto {
   @IsString({ message: 'La longitud debe ser una cadena de texto' })
   @IsOptional()
   readonly ubicacionLng?: string;
+
+  @IsString({ message: 'La marca del vehículo debe ser una cadena de texto' })
+  @IsOptional()
+  @MaxLength(255, {
+    message: 'La marca del vehículo no puede superar los 255 caracteres',
+  })
+  readonly vehiculoMarca?: string;
+
+  @IsString({ message: 'El modelo del vehículo debe ser una cadena de texto' })
+  @IsOptional()
+  @MaxLength(255, {
+    message: 'El modelo del vehículo no puede superar los 255 caracteres',
+  })
+  readonly vehiculoModelo?: string;
+
+  @IsString({ message: 'El color del vehículo debe ser una cadena de texto' })
+  @IsOptional()
+  @MaxLength(255, {
+    message: 'El color del vehículo no puede superar los 255 caracteres',
+  })
+  readonly vehiculoColor?: string;
+
+  @IsString({ message: 'La placa del vehículo debe ser una cadena de texto' })
+  @IsOptional()
+  @MaxLength(50, {
+    message: 'La placa del vehículo no puede superar los 50 caracteres',
+  })
+  readonly vehiculoPlaca?: string;
 }
