@@ -189,8 +189,8 @@ export class TelegramUpdate {
           );
           await ctx.reply(
             `🚗 *Grupo de Choferes:*\n` +
-              `Por favor únete al canal de coordinación mediante este enlace de un solo uso:\n` +
-              `\${invite.invite_link}`,
+              `Por favor únete al canal de coordinación mediante este enlace de un solo uso:\n\n` +
+              `${invite.invite_link}`,
             { parse_mode: 'Markdown' },
           );
         } catch (err) {
@@ -674,7 +674,7 @@ export class TelegramUpdate {
     const total =
       servicioActualizado?.totalFinal || servicio.totalFinal || '0.00';
 
-    // 1. Limpieza y Resumen en chat de la empleada (Editar su mensaje actual)
+    // 1. Editar el mensaje del botón "Finalizar Servicio" con el resumen del servicio
     const resumenEmpText =
       `✅ *¡Servicio Finalizado!* 🏁\n\n` +
       `📝 *Resumen del Servicio:*\n` +
@@ -682,12 +682,12 @@ export class TelegramUpdate {
       `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
       `• *Total Cobrado:* $${total}\n` +
       `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
-      `¡Excelente trabajo!`;
+      `¡Excelente trabajo! 🎉`;
 
     try {
       await ctx.editMessageText(resumenEmpText, { parse_mode: 'Markdown' });
     } catch (err) {
-      console.error('Error al editar mensaje de la empleada:', err);
+      console.error('Error al editar mensaje de resumen de la empleada:', err);
     }
 
     // 2. Limpieza de chat del cliente (Eliminar mensaje anterior)

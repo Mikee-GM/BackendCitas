@@ -140,11 +140,15 @@ export class TelegramDriverUpdate {
               : `*Datos del Vehículo:* No registrados\n`);
 
           try {
-            await ctx.telegram.sendMessage(
+            const sentMsg = await ctx.telegram.sendMessage(
               trip.servicio.empleada.usuario.telegramChatId,
               employeeNotificationText,
               { parse_mode: 'Markdown' },
             );
+            // Guardar el ID del mensaje para poder borrarlo después
+            trip.telegramEmpleadaMsgChoferCaminoId =
+              sentMsg.message_id.toString();
+            await this.dataSource.getRepository(Viajes).save(trip);
           } catch (sendErr) {
             console.error('Error al notificar a la empleada:', sendErr);
           }
@@ -294,11 +298,14 @@ export class TelegramDriverUpdate {
         `Por favor, reúnete con él para iniciar el viaje.`;
 
       try {
-        await ctx.telegram.sendMessage(
+        const sentMsg = await ctx.telegram.sendMessage(
           trip.servicio.empleada.usuario.telegramChatId,
           msgText,
           { parse_mode: 'Markdown' },
         );
+        // Guardar el ID del mensaje para poder borrarlo después
+        trip.telegramEmpleadaMsgChoferLlegadoId = sentMsg.message_id.toString();
+        await this.dataSource.getRepository(Viajes).save(trip);
       } catch (telegramErr) {
         console.error(
           `Error al notificar a la empleada sobre la llegada (chatId: ${trip.servicio.empleada.usuario.telegramChatId}):`,
@@ -414,6 +421,48 @@ export class TelegramDriverUpdate {
     await ctx.answerCbQuery(
       '🟢 Pasajera a bordo. Iniciando trayecto al cliente.',
     );
+
+    // Borrar mensajes previos del chat de la empleada ("chofer va en camino" y "chofer ha llegado")
+    // Recargar el viaje con la relación usuario para obtener el chatId y los IDs de mensajes guardados
+    const tripConUsuario = await this.dataSource.getRepository(Viajes).findOne({
+      where: { id: viajeId },
+      relations: { servicio: { empleada: { usuario: true }, cliente: true } },
+    });
+    const empChatId =
+      tripConUsuario?.servicio?.empleada?.usuario?.telegramChatId;
+
+    if (empChatId) {
+      const msgCaminoId = tripConUsuario?.telegramEmpleadaMsgChoferCaminoId;
+      const msgLlegadoId = tripConUsuario?.telegramEmpleadaMsgChoferLlegadoId;
+
+      if (msgCaminoId) {
+        try {
+          await ctx.telegram.deleteMessage(
+            empChatId,
+            parseInt(msgCaminoId, 10),
+          );
+        } catch (err) {
+          console.error(
+            'Error al borrar mensaje "chofer va en camino" de la empleada:',
+            err,
+          );
+        }
+      }
+
+      if (msgLlegadoId) {
+        try {
+          await ctx.telegram.deleteMessage(
+            empChatId,
+            parseInt(msgLlegadoId, 10),
+          );
+        } catch (err) {
+          console.error(
+            'Error al borrar mensaje "chofer ha llegado" de la empleada:',
+            err,
+          );
+        }
+      }
+    }
 
     // Mostrar destino del cliente con botones de navegación
     const clientLat = trip.servicio.ubicacionClienteLat;

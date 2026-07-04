@@ -80,6 +80,18 @@ export class Viajes {
   })
   horaFinViaje: Date | null;
 
+  @Column('varchar', {
+    name: 'telegram_empleada_msg_chofer_camino_id',
+    nullable: true,
+  })
+  telegramEmpleadaMsgChoferCaminoId: string | null;
+
+  @Column('varchar', {
+    name: 'telegram_empleada_msg_chofer_llegado_id',
+    nullable: true,
+  })
+  telegramEmpleadaMsgChoferLlegadoId: string | null;
+
   @ManyToOne(() => Choferes, (choferes) => choferes.viajes, {
     onDelete: 'RESTRICT',
     nullable: true,
