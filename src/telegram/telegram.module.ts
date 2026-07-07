@@ -4,7 +4,9 @@ import { TelegrafModule } from 'nestjs-telegraf';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { session } from 'telegraf';
 import { TelegramService } from './telegram.service';
-import { TelegramUpdate } from './telegram.update';
+import { TelegramAuthUpdate } from './telegram-auth.update';
+import { TelegramCatalogUpdate } from './telegram-catalog.update';
+import { TelegramBookingUpdate } from './telegram-booking.update';
 import { TelegramDriverUpdate } from './telegram-driver.update';
 import { TelegramAdminUpdate } from './telegram-admin.update';
 import { Usuarios } from '../users/entities/user.entity';
@@ -38,7 +40,9 @@ import { ServicesModule } from '../services/services.module';
   ],
   providers: [
     TelegramService,
-    TelegramUpdate,
+    TelegramAuthUpdate,
+    TelegramCatalogUpdate,
+    TelegramBookingUpdate,
     TelegramDriverUpdate,
     TelegramAdminUpdate,
   ],

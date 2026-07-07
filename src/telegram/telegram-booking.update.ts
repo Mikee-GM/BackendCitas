@@ -1,8 +1,8 @@
 import { Inject, forwardRef, Logger } from '@nestjs/common';
-import { Update, Start, Help, On, Ctx, Action, Command } from 'nestjs-telegraf';
+import { Update, Ctx, Action, On } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { RealtimeEventsService } from '../realtime/realtime.service';
 import { Usuarios } from '../users/entities/user.entity';
@@ -11,6 +11,8 @@ import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
+import { TelegramAuthUpdate } from './telegram-auth.update';
+import { TelegramCatalogUpdate } from './telegram-catalog.update';
 
 interface SessionData {
   step?:
@@ -34,8 +36,8 @@ interface BotContext extends Context {
 }
 
 @Update()
-export class TelegramUpdate {
-  private readonly logger = new Logger(TelegramUpdate.name);
+export class TelegramBookingUpdate {
+  private readonly logger = new Logger(TelegramBookingUpdate.name);
 
   constructor(
     @InjectRepository(Usuarios)
@@ -52,427 +54,11 @@ export class TelegramUpdate {
     private readonly servicesService: ServicesService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    @Inject(forwardRef(() => TelegramAuthUpdate))
+    private readonly telegramAuthUpdate: TelegramAuthUpdate,
+    @Inject(forwardRef(() => TelegramCatalogUpdate))
+    private readonly telegramCatalogUpdate: TelegramCatalogUpdate,
   ) {}
-
-  @Start()
-  async onStart(@Ctx() ctx: Context) {
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) return;
-
-    // Check if the user is a registered system user (employee, admin, etc.)
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    if (user) {
-      await ctx.reply(
-        `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
-          `¿Qué deseas hacer hoy?`,
-        Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
-      );
-      return;
-    }
-
-    // Otherwise, check/register client
-    let client = await this.clientesRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    const firstName = ctx.from?.first_name || '';
-    const username = ctx.from?.username || '';
-    const fullName =
-      [firstName, ctx.from?.last_name].filter(Boolean).join(' ') ||
-      username ||
-      'Cliente';
-
-    if (!client) {
-      // Auto-register client
-      client = this.clientesRepository.create({
-        telegramChatId: telegramId,
-        nombreTelegram: fullName,
-      });
-      await this.clientesRepository.save(client);
-    }
-
-    await ctx.reply(
-      `¡Hola ${fullName}! Bienvenido al sistema de pastelería.\n` +
-        `¿Qué deseas hacer hoy?\n\n` +
-        `🌐 *Visita nuestra web:* https://tu-sitio-pasteleria.com`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
-      },
-    );
-  }
-
-  @Help()
-  async onHelp(@Ctx() ctx: Context) {
-    await ctx.reply(
-      'Comandos disponibles:\n' +
-        '/start - Iniciar interacción con el bot\n' +
-        '/empleadas - Ver el catálogo de empleadas\n' +
-        '/vincular <código> - Vincular cuenta de empleado o chofer\n' +
-        '/desvincular - Desvincular tu cuenta de empleado o chofer\n' +
-        '/help - Ver los comandos de ayuda',
-    );
-  }
-
-  @Command('vincular')
-  async onVincular(@Ctx() ctx: Context) {
-    const messageText = (ctx.message as { text?: string })?.text || '';
-    const parts = messageText.split(' ');
-    if (parts.length < 2) {
-      await ctx.reply(
-        'Por favor proporciona el código de vinculación.\n' +
-          'Uso: /vincular <código_de_6_dígitos>',
-      );
-      return;
-    }
-
-    const code = parts[1].trim();
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) return;
-
-    // Find the user with the active, non-expired OTP code
-    const user = await this.usuariosRepository.findOne({
-      where: {
-        telegramVerificationCode: code,
-        telegramVerificationExpiresAt: MoreThan(new Date()),
-      },
-    });
-
-    if (!user) {
-      await ctx.reply(
-        'El código de vinculación no es válido o ha expirado. ' +
-          'Por favor solicita un nuevo código desde el Panel de Administración.',
-      );
-      return;
-    }
-
-    // Check if this telegramId is already linked to another user
-    const existingUser = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    if (existingUser) {
-      await ctx.reply(
-        `Este Telegram ya se encuentra vinculado a la cuenta ${existingUser.email}. ` +
-          `No se puede vincular a otra cuenta.`,
-      );
-      return;
-    }
-
-    // Link account
-    user.telegramChatId = telegramId;
-    user.telegramVerificationCode = null;
-    user.telegramVerificationExpiresAt = null;
-    await this.usuariosRepository.save(user);
-
-    await ctx.reply(
-      `¡Vinculación exitosa!\n` +
-        `Tu cuenta de Telegram ha sido asociada al usuario: ${user.email}\n` +
-        `Rol: ${user.rol.toUpperCase()}\n` +
-        `Ahora puedes interactuar con el bot para tus tareas laborales.`,
-    );
-
-    if (user.rol === 'chofer') {
-      const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
-      if (driversGroupId) {
-        try {
-          const invite = await ctx.telegram.createChatInviteLink(
-            driversGroupId,
-            {
-              member_limit: 1,
-              expire_date: Math.floor(Date.now() / 1000) + 86400, // Expire in 1 day
-            },
-          );
-          await ctx.reply(
-            `🚗 *Grupo de Choferes:*\n` +
-              `Por favor únete al canal de coordinación mediante este enlace de un solo uso:\n\n` +
-              `${invite.invite_link}`,
-            { parse_mode: 'Markdown' },
-          );
-        } catch (err) {
-          console.error('Error al generar invite link para el chofer:', err);
-        }
-      }
-    }
-  }
-
-  @Command('desvincular')
-  async onDesvincular(@Ctx() ctx: Context) {
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) return;
-
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    if (!user) {
-      await ctx.reply(
-        'No tienes ninguna cuenta de personal vinculada a este Telegram.',
-      );
-      return;
-    }
-
-    user.telegramChatId = null;
-    user.telegramVerificationCode = null;
-    user.telegramVerificationExpiresAt = null;
-    await this.usuariosRepository.save(user);
-
-    await ctx.reply(
-      `Tu cuenta (${user.email}) ha sido desvinculada exitosamente de este Telegram.`,
-    );
-  }
-
-  @Command('panel')
-  async onPanel(@Ctx() ctx: Context) {
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) return;
-
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    if (!user || (user.rol !== 'jefe' && user.rol !== 'admin')) {
-      await ctx.reply(
-        '❌ No tienes permisos de Jefe o Administrador para acceder al panel.',
-      );
-      return;
-    }
-
-    const payload = { sub: user.id, email: user.email, rol: user.rol };
-    const token = this.jwtService.sign(payload);
-
-    await ctx.reply(
-      `🔑 *Token de Acceso Jefes:*\n\n` +
-        `\`${token}\`\n\n` +
-        `Usa este token para autenticar tu panel externo conectándote al flujo de Server-Sent Events (SSE).`,
-      { parse_mode: 'Markdown' },
-    );
-  }
-
-  @Action('ver_menu')
-  async onVerMenu(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    await ctx.reply(
-      'Aquí tienes nuestro menú de pasteles:\n' +
-        '1. Tres Leches 🍰\n' +
-        '2. Selva Negra 🍫\n' +
-        '3. Tarta de Fresa 🍓',
-    );
-  }
-
-  @Action('ver_ayuda')
-  async onVerAyuda(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    await ctx.reply(
-      'Puedes usar /start para ver el menú principal, o vincular tu cuenta con /vincular <código> si eres personal.',
-    );
-  }
-
-  async listEmpleadas(ctx: Context) {
-    const list = await this.empleadasRepository.find({
-      where: { catalogoActivo: true },
-    });
-
-    if (list.length === 0) {
-      await ctx.reply(
-        'No hay empleadas activas en el catálogo en este momento.',
-      );
-      return;
-    }
-
-    await ctx.reply('Catálogo de Empleadas:');
-
-    for (const e of list) {
-      let status = '🔴 Ocupada';
-      if (!e.disponible) {
-        const activeService = await this.serviciosRepository.findOne({
-          where: { empleadaId: e.id, estado: 'en_curso' },
-        });
-        if (activeService && activeService.horaInicioServicio) {
-          const durationMs =
-            Number(activeService.duracionPactadaHoras) * 60 * 60 * 1000;
-          const graceMs = 15 * 60 * 1000; // 15 minutes grace as requested
-          const endTime =
-            activeService.horaInicioServicio.getTime() + durationMs + graceMs;
-          const remainingMs = endTime - Date.now();
-          if (remainingMs > 0) {
-            const remainingMin = Math.ceil(remainingMs / (60 * 1000));
-            const hours = Math.floor(remainingMin / 60);
-            const minutes = remainingMin % 60;
-            const timeStr =
-              hours > 0 ? `~${hours}h ${minutes}m` : `~${minutes}m`;
-            status = `🔴 Ocupada (disp. en ${timeStr})`;
-          } else {
-            status = `🔴 Ocupada (disp. pronto)`;
-          }
-        }
-      } else {
-        status = '🟢 Disponible';
-      }
-      const caption = `*${e.nombreArtistico}* (${status})\n💰 *Tarifa:* $${e.precioBaseHora}/hr`;
-      const keyboard = Markup.inlineKeyboard([
-        Markup.button.callback(
-          '🔍 Ver Perfil Completo',
-          `ver_empleada:${e.id}`,
-        ),
-      ]);
-
-      const hasValidPhoto =
-        e.fotoPerfilUrl &&
-        (e.fotoPerfilUrl.startsWith('http://') ||
-          e.fotoPerfilUrl.startsWith('https://'));
-
-      if (hasValidPhoto) {
-        try {
-          await ctx.replyWithPhoto(e.fotoPerfilUrl!, {
-            caption,
-            parse_mode: 'Markdown',
-            ...keyboard,
-          });
-        } catch (error) {
-          // Fallback si falla la descarga de la imagen por Telegram
-          await ctx.reply(caption, {
-            parse_mode: 'Markdown',
-            ...keyboard,
-          });
-        }
-      } else {
-        await ctx.reply(caption, {
-          parse_mode: 'Markdown',
-          ...keyboard,
-        });
-      }
-    }
-  }
-
-  @Command('empleadas')
-  async onCommandEmpleadas(@Ctx() ctx: Context) {
-    await this.listEmpleadas(ctx);
-  }
-
-  @Action('ver_empleadas')
-  async onActionVerEmpleadas(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    await this.listEmpleadas(ctx);
-  }
-
-  @Action(/^ver_empleada:(.+)$/)
-  async onVerEmpleado(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    const match = (ctx as any).match;
-    if (!match) return;
-    const id = match[1];
-
-    const empleada = await this.empleadasRepository.findOne({
-      where: { id },
-      relations: { empleadaFotos: true },
-    });
-
-    if (!empleada) {
-      await ctx.reply('La empleada seleccionada ya no está disponible.');
-      return;
-    }
-
-    let status = '🔴 Ocupada';
-    if (!empleada.disponible) {
-      const activeService = await this.serviciosRepository.findOne({
-        where: { empleadaId: empleada.id, estado: 'en_curso' },
-      });
-      if (activeService && activeService.horaInicioServicio) {
-        const durationMs =
-          Number(activeService.duracionPactadaHoras) * 60 * 60 * 1000;
-        const graceMs = 15 * 60 * 1000;
-        const endTime =
-          activeService.horaInicioServicio.getTime() + durationMs + graceMs;
-        const remainingMs = endTime - Date.now();
-        if (remainingMs > 0) {
-          const remainingMin = Math.ceil(remainingMs / (60 * 1000));
-          const hours = Math.floor(remainingMin / 60);
-          const minutes = remainingMin % 60;
-          const timeStr = hours > 0 ? `~${hours}h ${minutes}m` : `~${minutes}m`;
-          status = `🔴 Ocupada (disp. en ${timeStr})`;
-        } else {
-          status = `🔴 Ocupada (disp. pronto)`;
-        }
-      }
-    } else {
-      status = '🟢 Disponible';
-    }
-    const caption =
-      `*${empleada.nombreArtistico}*\n` +
-      `Estado: ${status}\n` +
-      `💰 *Tarifa:* $${empleada.precioBaseHora}/hr\n\n` +
-      `_${empleada.descripcion || 'Sin descripción'}_`;
-
-    const photos: string[] = [];
-    if (
-      empleada.fotoPerfilUrl &&
-      (empleada.fotoPerfilUrl.startsWith('http://') ||
-        empleada.fotoPerfilUrl.startsWith('https://'))
-    ) {
-      photos.push(empleada.fotoPerfilUrl);
-    }
-    if (empleada.empleadaFotos && empleada.empleadaFotos.length > 0) {
-      empleada.empleadaFotos.forEach((f) => {
-        if (
-          f.url &&
-          (f.url.startsWith('http://') || f.url.startsWith('https://'))
-        ) {
-          photos.push(f.url);
-        }
-      });
-    }
-
-    const hireKeyboard = empleada.disponible
-      ? Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              '🤝 Contratar',
-              `contratar_empleada:${empleada.id}`,
-            ),
-          ],
-        ])
-      : Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              '📅 Reservar Siguiente Turno',
-              `reservar_siguiente:${empleada.id}`,
-            ),
-          ],
-          [Markup.button.callback('🔙 Volver al Catálogo', 'ver_empleadas')],
-        ]);
-
-    if (photos.length > 0) {
-      try {
-        const mediaGroup = photos.map((url, index) => ({
-          type: 'photo' as const,
-          media: url,
-          caption: index === 0 ? caption : undefined,
-          parse_mode: 'Markdown' as const,
-        }));
-
-        await ctx.replyWithMediaGroup(mediaGroup);
-        await ctx.reply('¿Deseas contratar a esta empleada?', hireKeyboard);
-      } catch (error) {
-        // Fallback si Telegram no puede descargar las imágenes (por ej. si apuntan a localhost)
-        await ctx.reply(
-          caption + '\n\n_(Nota: Las fotos no se pudieron cargar en Telegram)_',
-          { parse_mode: 'Markdown', ...hireKeyboard },
-        );
-      }
-    } else {
-      await ctx.reply(caption, { parse_mode: 'Markdown', ...hireKeyboard });
-    }
-  }
 
   @Action(/^contratar_empleada:(.+)$/)
   async onContratarEmpleada(@Ctx() ctx: BotContext) {
@@ -1666,17 +1252,17 @@ export class TelegramUpdate {
       cleanText.includes('volver al menú')
     ) {
       ctx.session = {};
-      return this.onStart(ctx);
+      return this.telegramAuthUpdate.onStart(ctx);
     }
 
     if (cleanText.includes('ver empleadas')) {
       ctx.session = {};
-      return this.listEmpleadas(ctx);
+      return this.telegramCatalogUpdate.listEmpleadas(ctx);
     }
 
     if (cleanText.includes('ver ayuda') || cleanText.includes('ayuda')) {
       ctx.session = {};
-      return this.onHelp(ctx);
+      return this.telegramAuthUpdate.onHelp(ctx);
     }
 
     const step = ctx.session?.step;
