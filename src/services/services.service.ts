@@ -284,7 +284,7 @@ export class ServicesService implements OnModuleInit {
   async rechazar(id: string, jefeId: string): Promise<Servicios> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id },
-      relations: { empleada: true },
+      relations: { empleada: true, jefe: true, cliente: true },
     });
 
     if (!servicio) {
@@ -334,6 +334,38 @@ export class ServicesService implements OnModuleInit {
       type: 'service_rejected',
       data: { id: servicio.id },
     });
+
+    // 3. Eliminar el tema (hilo) del grupo de Telegram si existe
+    if (servicio.telegramThreadId && servicio.jefe?.grupoTelegramId) {
+      try {
+        await this.bot.telegram.deleteForumTopic(
+          servicio.jefe.grupoTelegramId,
+          parseInt(servicio.telegramThreadId, 10),
+        );
+      } catch (err) {
+        console.error('Error deleting forum topic on reject:', err);
+      }
+    }
+
+    // 4. Notificar al cliente via Telegram con opciones de reinicio
+    if (servicio.clienteTelegramId) {
+      try {
+        await this.bot.telegram.sendMessage(
+          servicio.clienteTelegramId,
+          `❌ *Tu solicitud de servicio ha sido rechazada.* \n\n` +
+            `Lamentamos el inconveniente. Puedes volver al catálogo o iniciar un nuevo flujo usando el botón de abajo:`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('👩‍🍳 Ver Empleadas', 'ver_empleadas')],
+              [Markup.button.callback('🏠 Volver al Menú', 'ver_menu')],
+            ]),
+          },
+        );
+      } catch (err) {
+        console.error('Error notifying client of rejected service:', err);
+      }
+    }
 
     return servicio;
   }

@@ -71,7 +71,12 @@ export class TelegramAdminUpdate {
         await ctx.answerCbQuery('🟢 Servicio Aceptado exitosamente.');
       } else {
         await this.servicesService.rechazar(serviceId, user.id);
-        await ctx.answerCbQuery('🔴 Servicio Rechazado.');
+        try {
+          await ctx.answerCbQuery('🔴 Servicio Rechazado.');
+        } catch (e) {
+          // ignore
+        }
+        return;
       }
 
       const originalText = (ctx.callbackQuery?.message as any)?.text || '';

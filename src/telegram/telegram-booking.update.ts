@@ -804,6 +804,12 @@ export class TelegramBookingUpdate {
               .resize()
               .oneTime(),
           });
+          await ctx.telegram.sendLocation(
+            jefeUser.grupoTelegramId,
+            parseFloat(lat),
+            parseFloat(lng),
+            { message_thread_id: topic.message_thread_id },
+          );
         } catch (err) {
           this.logger.error(
             'Error al crear forum topic para servicio encadenado:',
@@ -923,6 +929,12 @@ export class TelegramBookingUpdate {
             .resize()
             .oneTime(),
         });
+        await ctx.telegram.sendLocation(
+          jefeUser.grupoTelegramId,
+          parseFloat(lat),
+          parseFloat(lng),
+          { message_thread_id: topic.message_thread_id },
+        );
       } catch (err) {
         this.logger.error(
           'Error al crear forum topic para servicio normal:',
@@ -1222,10 +1234,6 @@ export class TelegramBookingUpdate {
             );
           } else {
             await this.servicesService.rechazar(service.id, user.id);
-            await ctx.reply(
-              `🔴 *Servicio Rechazado* por ${user.email}`,
-              Markup.removeKeyboard(),
-            );
           }
         } catch (err: any) {
           this.logger.error(
