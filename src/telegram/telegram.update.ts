@@ -1,4 +1,4 @@
-import { Inject, forwardRef } from '@nestjs/common';
+import { Inject, forwardRef, Logger } from '@nestjs/common';
 import { Update, Start, Help, On, Ctx, Action, Command } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -35,6 +35,8 @@ interface BotContext extends Context {
 
 @Update()
 export class TelegramUpdate {
+  private readonly logger = new Logger(TelegramUpdate.name);
+
   constructor(
     @InjectRepository(Usuarios)
     private readonly usuariosRepository: Repository<Usuarios>,
@@ -776,7 +778,11 @@ export class TelegramUpdate {
 
     const servicio = await this.serviciosRepository.findOne({
       where: { id: servicioId },
-      relations: { cliente: true, empleada: { usuario: true } },
+      relations: {
+        cliente: true,
+        empleada: { usuario: true, jefe: true },
+        jefe: true,
+      },
     });
 
     if (!servicio) {
@@ -795,8 +801,33 @@ export class TelegramUpdate {
 
     // Cambiar estado a finalizado
     servicio.estado = 'finalizado';
-    servicio.horaFinServicio = new Date();
-    servicio.duracionFinalHoras = servicio.duracionPactadaHoras;
+    const fin = new Date();
+    servicio.horaFinServicio = fin;
+
+    // Calcular duración real en horas y formato legible (horas, minutos, segundos)
+    let duracionRealStr = servicio.duracionPactadaHoras;
+    let duracionRealVal = parseFloat(servicio.duracionPactadaHoras);
+    let duracionFormatted = `${servicio.duracionPactadaHoras} horas`;
+    if (servicio.horaInicioServicio) {
+      const inicio = new Date(servicio.horaInicioServicio);
+      const diffMs = fin.getTime() - inicio.getTime();
+      duracionRealVal = diffMs / (1000 * 60 * 60);
+      duracionRealStr = duracionRealVal.toFixed(2);
+
+      const totalSeconds = Math.floor(diffMs / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      const parts: string[] = [];
+      if (hours > 0) parts.push(`${hours} ${hours === 1 ? 'hora' : 'horas'}`);
+      if (minutes > 0)
+        parts.push(`${minutes} ${minutes === 1 ? 'minuto' : 'minutos'}`);
+      if (seconds > 0 || parts.length === 0)
+        parts.push(`${seconds} ${seconds === 1 ? 'segundo' : 'segundos'}`);
+      duracionFormatted = parts.join(', ');
+    }
+    servicio.duracionFinalHoras = duracionRealStr;
     await this.serviciosRepository.save(servicio);
 
     // Actualizar disponibilidad de la empleada a true (disponible)
@@ -811,7 +842,11 @@ export class TelegramUpdate {
     // Volver a cargar para obtener totales calculados por triggers
     const servicioActualizado = await this.serviciosRepository.findOne({
       where: { id: servicioId },
-      relations: { cliente: true, empleada: { usuario: true } },
+      relations: {
+        cliente: true,
+        empleada: { usuario: true, jefe: true },
+        jefe: true,
+      },
     });
 
     const total =
@@ -822,7 +857,8 @@ export class TelegramUpdate {
       `✅ *¡Servicio Finalizado!* 🏁\n\n` +
       `📝 *Resumen del Servicio:*\n` +
       `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-      `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+      `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
+      `• *Duración Real:* ${duracionFormatted}\n` +
       `• *Total Cobrado:* $${total}\n` +
       `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
       `¡Excelente trabajo! 🎉`;
@@ -851,10 +887,52 @@ export class TelegramUpdate {
         `🏁 *¡Tu servicio ha finalizado!* 🍰\n\n` +
         `📝 *Resumen de tu Servicio:*\n` +
         `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
-        `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+        `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
+        `• *Duración Real:* ${duracionFormatted}\n` +
         `• *Total a Pagar:* $${total}\n` +
         `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
         `Por favor, califica el servicio recibido:`;
+
+      const duracionPactadaVal = parseFloat(servicio.duracionPactadaHoras);
+      const finalizoAntes = duracionRealVal < duracionPactadaVal;
+
+      const inlineButtons: any[] = [
+        [
+          Markup.button.callback('⭐', `calificar_servicio:${servicio.id}:1`),
+          Markup.button.callback('⭐⭐', `calificar_servicio:${servicio.id}:2`),
+          Markup.button.callback(
+            '⭐⭐⭐',
+            `calificar_servicio:${servicio.id}:3`,
+          ),
+        ],
+        [
+          Markup.button.callback(
+            '⭐⭐⭐⭐',
+            `calificar_servicio:${servicio.id}:4`,
+          ),
+          Markup.button.callback(
+            '⭐⭐⭐⭐⭐',
+            `calificar_servicio:${servicio.id}:5`,
+          ),
+        ],
+      ];
+
+      const jefeEncargado = servicio.empleada?.jefe || servicio.jefe;
+      if (finalizoAntes && jefeEncargado?.telefono) {
+        const cleanPhone = jefeEncargado.telefono.replace(/[^0-9]/g, '');
+        const messageText =
+          `Hola, soy el cliente ${servicio.cliente?.nombreTelegram || ''}.\n` +
+          `Quiero contactar con soporte sobre mi servicio:\n` +
+          `• ID del Servicio: ${servicio.id}\n` +
+          `• Empleada: ${servicio.empleada?.nombreArtistico || ''}\n` +
+          `• Hora de inicio: ${servicio.horaInicioServicio ? new Date(servicio.horaInicioServicio).toLocaleString() : ''}\n` +
+          `• Hora de fin: ${fin.toLocaleString()}\n` +
+          `• Tiempo total: ${duracionFormatted}\n` +
+          `• Horas pactadas originalmente: ${servicio.duracionPactadaHoras} horas`;
+
+        const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`;
+        inlineButtons.push([Markup.button.url('📞 Contactar Soporte', waUrl)]);
+      }
 
       try {
         await ctx.telegram.sendMessage(
@@ -862,32 +940,7 @@ export class TelegramUpdate {
           resumenCliText,
           {
             parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback(
-                  '⭐',
-                  `calificar_servicio:${servicio.id}:1`,
-                ),
-                Markup.button.callback(
-                  '⭐⭐',
-                  `calificar_servicio:${servicio.id}:2`,
-                ),
-                Markup.button.callback(
-                  '⭐⭐⭐',
-                  `calificar_servicio:${servicio.id}:3`,
-                ),
-              ],
-              [
-                Markup.button.callback(
-                  '⭐⭐⭐⭐',
-                  `calificar_servicio:${servicio.id}:4`,
-                ),
-                Markup.button.callback(
-                  '⭐⭐⭐⭐⭐',
-                  `calificar_servicio:${servicio.id}:5`,
-                ),
-              ],
-            ]),
+            ...Markup.inlineKeyboard(inlineButtons),
           },
         );
       } catch (err) {
@@ -1091,12 +1144,20 @@ export class TelegramUpdate {
     if (isIndependent) {
       jefeId = empleada.usuarioId;
     } else {
-      const jefe = await this.usuariosRepository.findOne({
-        where: [
-          { rol: 'jefe', activo: true },
-          { rol: 'admin', activo: true },
-        ],
-      });
+      let jefe: Usuarios | null = null;
+      if (empleada.jefeId) {
+        jefe = await this.usuariosRepository.findOne({
+          where: { id: empleada.jefeId, activo: true },
+        });
+      }
+      if (!jefe) {
+        jefe = await this.usuariosRepository.findOne({
+          where: [
+            { rol: 'jefe', activo: true },
+            { rol: 'admin', activo: true },
+          ],
+        });
+      }
 
       if (!jefe) {
         await ctx.reply(
@@ -1121,7 +1182,44 @@ export class TelegramUpdate {
         estado: 'pendiente_encadenado',
         notas: notasUbicacion,
         servicioPrevioId: servicioPrevioId || null,
+        clienteTelegramId: telegramId,
+        iaActiva: false,
       });
+
+      const jefeUser = await this.usuariosRepository.findOne({
+        where: { id: jefeId },
+      });
+      if (jefeUser && jefeUser.grupoTelegramId) {
+        try {
+          const clientName =
+            client.nombreTelegram || ctx.from?.first_name || 'Cliente';
+          const topic = await ctx.telegram.createForumTopic(
+            jefeUser.grupoTelegramId,
+            `👤 Cliente: ${clientName}`,
+          );
+          nuevoServicioEnc.telegramThreadId =
+            topic.message_thread_id.toString();
+
+          const detailsMsg =
+            `📋 *Información del Servicio (Cita Encadenada):*\n\n` +
+            `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
+            `• *Empleada:* ${empleada.nombreArtistico}\n` +
+            `• *Duración:* ${duracionPactadaHoras} horas\n` +
+            `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+            `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
+            (notasUbicacion ? `• *Ubicación/Notas:* ${notasUbicacion}\n` : '') +
+            `• *Estado:* Pendiente Encadenada`;
+          await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
+            message_thread_id: topic.message_thread_id,
+            parse_mode: 'Markdown',
+          });
+        } catch (err) {
+          this.logger.error(
+            'Error al crear forum topic para servicio encadenado:',
+            err,
+          );
+        }
+      }
       await this.serviciosRepository.save(nuevoServicioEnc);
 
       // Calculate estimated start time from the active service
@@ -1201,8 +1299,43 @@ export class TelegramUpdate {
       precioBaseHoraPactado: empleada.precioBaseHora.toString(),
       estado: 'pendiente',
       notas: notasUbicacion,
+      clienteTelegramId: telegramId,
+      iaActiva: false,
     });
 
+    const jefeUser = await this.usuariosRepository.findOne({
+      where: { id: jefeId },
+    });
+    if (jefeUser && jefeUser.grupoTelegramId) {
+      try {
+        const clientName =
+          client.nombreTelegram || ctx.from?.first_name || 'Cliente';
+        const topic = await ctx.telegram.createForumTopic(
+          jefeUser.grupoTelegramId,
+          `👤 Cliente: ${clientName}`,
+        );
+        nuevoServicio.telegramThreadId = topic.message_thread_id.toString();
+
+        const detailsMsg =
+          `📋 *Información del Servicio:*\n\n` +
+          `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
+          `• *Empleada:* ${empleada.nombreArtistico}\n` +
+          `• *Duración:* ${duracionPactadaHoras} horas\n` +
+          `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+          `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
+          (notasUbicacion ? `• *Ubicación/Notas:* ${notasUbicacion}\n` : '') +
+          `• *Estado:* Pendiente`;
+        await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
+          message_thread_id: topic.message_thread_id,
+          parse_mode: 'Markdown',
+        });
+      } catch (err) {
+        this.logger.error(
+          'Error al crear forum topic para servicio normal:',
+          err,
+        );
+      }
+    }
     await this.serviciosRepository.save(nuevoServicio);
 
     // Emit event to Jefes in real-time
@@ -1422,11 +1555,111 @@ export class TelegramUpdate {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
+    const text = (ctx.message as { text?: string })?.text || '';
+    const cleanText = text.trim().toLowerCase();
+
+    const message = ctx.message as any;
+    const threadId = message?.message_thread_id;
+    const chatId = ctx.chat?.id?.toString();
+
+    // Flujo 2: Respuestas del Jefe desde su Hilo hacia el Cliente (Webhook de Salida)
+    if (
+      threadId &&
+      (ctx.chat?.type === 'supergroup' || ctx.chat?.type === 'group')
+    ) {
+      try {
+        const service = await this.serviciosRepository.findOne({
+          where: {
+            telegramThreadId: threadId.toString(),
+            jefe: {
+              grupoTelegramId: chatId,
+            },
+          },
+        });
+
+        if (service && service.clienteTelegramId) {
+          await ctx.telegram.sendMessage(service.clienteTelegramId, text);
+        }
+      } catch (err) {
+        this.logger.error('Error en Flujo 2 (Respuesta del Jefe):', err);
+      }
+      return;
+    }
+
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const text = (ctx.message as { text?: string })?.text || '';
-    const cleanText = text.trim().toLowerCase();
+    // Flujo 1: Mensajes del Cliente hacia el Súpergrupo del Jefe Asignado (Webhook de Entrada)
+    if (ctx.chat?.type === 'private') {
+      try {
+        const activeService = await this.serviciosRepository.findOne({
+          where: { clienteTelegramId: telegramId },
+          relations: {
+            jefe: true,
+            cliente: true,
+            empleada: true,
+          },
+          order: { createdAt: 'DESC' },
+        });
+
+        if (activeService && activeService.iaActiva === false) {
+          const jefe = activeService.jefe;
+          const grupoTelegramId = jefe?.grupoTelegramId;
+          this.logger.log(
+            `Procesando mensaje de cliente. activeService.id=${activeService.id}, jefeId=${jefe?.id}, grupoTelegramId=${grupoTelegramId}`,
+          );
+
+          if (!grupoTelegramId) {
+            this.logger.error(
+              `El jefe para el servicio ${activeService.id} no tiene configurado grupoTelegramId.`,
+            );
+            return;
+          }
+
+          if (!activeService.telegramThreadId) {
+            const clientName =
+              activeService.cliente?.nombreTelegram ||
+              ctx.from?.first_name ||
+              'Cliente';
+            this.logger.log(
+              `Creando tema de foro para cliente: ${clientName} en grupo: ${grupoTelegramId}`,
+            );
+            const topic = await ctx.telegram.createForumTopic(
+              grupoTelegramId,
+              `👤 Cliente: ${clientName}`,
+            );
+            this.logger.log(
+              `Tema de foro creado con id: ${topic.message_thread_id}`,
+            );
+            activeService.telegramThreadId = topic.message_thread_id.toString();
+            await this.serviciosRepository.save(activeService);
+
+            const detailsMsg =
+              `📋 *Información del Servicio:*\n\n` +
+              `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
+              `• *Empleada:* ${activeService.empleada?.nombreArtistico || 'N/A'}\n` +
+              `• *Duración:* ${activeService.duracionPactadaHoras} horas\n` +
+              `• *Método de Pago:* ${activeService.metodoPago.toUpperCase()}\n` +
+              `• *Tarifa:* $${activeService.precioBaseHoraPactado}/hr\n` +
+              (activeService.notas
+                ? `• *Ubicación/Notas:* ${activeService.notas}\n`
+                : '') +
+              `• *Estado:* ${activeService.estado}`;
+            await ctx.telegram.sendMessage(grupoTelegramId, detailsMsg, {
+              message_thread_id: topic.message_thread_id,
+              parse_mode: 'Markdown',
+            });
+          }
+
+          await ctx.telegram.sendMessage(grupoTelegramId, text, {
+            message_thread_id: parseInt(activeService.telegramThreadId),
+          });
+          return;
+        }
+      } catch (err) {
+        this.logger.error('Error en Flujo 1 (Cliente -> Súpergrupo):', err);
+      }
+    }
 
     if (
       cleanText.includes('volver al menu') ||

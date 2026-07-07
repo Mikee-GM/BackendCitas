@@ -86,6 +86,10 @@ export class CreateEmployeeDto {
   @IsOptional()
   readonly ubicacionLng?: string;
 
+  @IsString({ message: 'El ID del jefe debe ser una cadena de texto' })
+  @IsOptional()
+  readonly jefeId?: string;
+
   @IsArray({ message: 'Las fotos extras deben proporcionarse como un arreglo' })
   @IsString({
     each: true,

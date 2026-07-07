@@ -31,7 +31,7 @@ export class ServicesService implements OnModuleInit {
   ) {}
 
   async create(createServiceDto: any): Promise<Servicios> {
-    // Si es independiente y no tiene jefeId especificado, asignamos su propio usuarioId
+    // Si no tiene jefeId especificado, asignamos el jefe correspondiente a la empleada
     if (createServiceDto.empleadaId && !createServiceDto.jefeId) {
       try {
         const empleadasRepository =
@@ -39,12 +39,16 @@ export class ServicesService implements OnModuleInit {
         const emp = await empleadasRepository.findOne({
           where: { id: createServiceDto.empleadaId },
         });
-        if (emp && emp.tipo === 'independiente') {
-          createServiceDto.jefeId = emp.usuarioId;
+        if (emp) {
+          if (emp.tipo === 'independiente') {
+            createServiceDto.jefeId = emp.usuarioId;
+          } else if (emp.jefeId) {
+            createServiceDto.jefeId = emp.jefeId;
+          }
         }
       } catch (err) {
         console.error(
-          'Error auto-assigning jefeId for independent employee:',
+          'Error auto-assigning jefeId for employee:',
           err,
         );
       }
