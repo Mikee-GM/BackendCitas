@@ -2,7 +2,7 @@ import { Inject, forwardRef, Logger } from '@nestjs/common';
 import { Update, Ctx, Action, On } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { RealtimeEventsService } from '../realtime/realtime.service';
 import { Usuarios } from '../users/entities/user.entity';
@@ -22,13 +22,16 @@ interface SessionData {
     | 'AWAITING_RATING_COMMENT'
     | 'AWAITING_DURATION_ENCADENADO'
     | 'AWAITING_PAYMENT_METHOD_ENCADENADO'
-    | 'AWAITING_LOCATION_ENCADENADO';
+    | 'AWAITING_LOCATION_ENCADENADO'
+    | 'CHAT_CON_EMPLEADA'
+    | 'CHAT_CON_EMPLEADA_ENCADENADO';
   empleadaId?: string;
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
   servicioIdCalificacion?: string;
   /** ID del servicio en_curso al que se encadenará la nueva cita */
   servicioPrevioId?: string;
+  chatHistory?: { role: 'user' | 'model'; parts: { text: string }[] }[];
 }
 
 interface BotContext extends Context {
@@ -60,6 +63,47 @@ export class TelegramBookingUpdate {
     private readonly telegramCatalogUpdate: TelegramCatalogUpdate,
   ) {}
 
+  async getGroqResponse(
+    systemPrompt: string,
+    history: { role: 'user' | 'model'; parts: { text: string }[] }[],
+  ): Promise<string> {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      throw new Error('GROQ_API_KEY is not defined in environment variables');
+    }
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map((msg) => ({
+        role: msg.role === 'model' ? 'assistant' : 'user',
+        content: msg.parts?.[0]?.text || '',
+      })),
+    ];
+
+    const response = await fetch(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          messages,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Groq API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
   @Action(/^contratar_empleada:(.+)$/)
   async onContratarEmpleada(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
@@ -78,56 +122,67 @@ export class TelegramBookingUpdate {
       return;
     }
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      await ctx.reply(
+        '⚠️ El sistema de IA no está configurado (falta GEMINI_API_KEY en el servidor). Por favor contacta al administrador.',
+      );
+      return;
+    }
+
     if (!ctx.session) {
       ctx.session = {};
     }
 
-    ctx.session.step = 'AWAITING_DURATION';
+    ctx.session.step = 'CHAT_CON_EMPLEADA';
     ctx.session.empleadaId = empleadaId;
 
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+Tarifa por hora: $${empleada.precioBaseHora}/hr.
+Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+
+Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
+Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
+Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
+1. Primero, pregúntale cuántas horas de servicio desea (duración).
+2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+
+Reglas de comportamiento:
+- Responde siempre manteniéndote en personaje.
+- No inventes los datos; pídelos educadamente y uno por uno.
+- Mantén tus respuestas cortas y claras.
+- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca JSON en una sola línea:
+[DATA: {"duracion": X, "pago": "Y"}]
+Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').
+
+Por favor, preséntate, saluda de forma cariñosa y pregúntale al cliente únicamente cuántas horas de servicio desea.`;
+
+    const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [
+      { role: 'user', parts: [{ text: 'Hola' }] },
+    ];
+
     try {
-      await ctx.editMessageText(
-        `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
-          `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback('1 Hora', 'duracion_1'),
-              Markup.button.callback('2 Horas', 'duracion_2'),
-              Markup.button.callback('3 Horas', 'duracion_3'),
-            ],
-            [
-              Markup.button.callback('4 Horas', 'duracion_4'),
-              Markup.button.callback('5 Horas', 'duracion_5'),
-              Markup.button.callback('6 Horas', 'duracion_6'),
-            ],
-            [Markup.button.callback('8 Horas', 'duracion_8')],
-          ]),
-        },
-      );
+      const responseText = await this.getGroqResponse(systemPrompt, history);
+      history.push({ role: 'model', parts: [{ text: responseText }] });
+      ctx.session.chatHistory = history;
+
+      await ctx.reply(responseText, { parse_mode: 'Markdown' });
     } catch (err) {
-      // Fallback if we cannot edit the message (e.g. if the message was deleted or isn't editable)
-      await ctx.reply(
-        `Has seleccionado a *${empleada.nombreArtistico}*.\n\n` +
-          `⏱️ *Selecciona la duración pactada* del servicio en horas usando los botones, o escribe una duración personalizada directamente en el chat (ejemplo: 2.5):`,
+      this.logger.error('Error starting LLM chat session:', err);
+      const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}* y me encantaría atenderte. ¿Cuántas horas de servicio necesitas?`;
+      await ctx.reply(fallbackMsg, { parse_mode: 'Markdown' });
+      // Initialize basic history on error fallback
+      ctx.session.chatHistory = [
+        { role: 'user', parts: [{ text: 'Hola' }] },
         {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback('1 Hora', 'duracion_1'),
-              Markup.button.callback('2 Horas', 'duracion_2'),
-              Markup.button.callback('3 Horas', 'duracion_3'),
-            ],
-            [
-              Markup.button.callback('4 Horas', 'duracion_4'),
-              Markup.button.callback('5 Horas', 'duracion_5'),
-              Markup.button.callback('6 Horas', 'duracion_6'),
-            ],
-            [Markup.button.callback('8 Horas', 'duracion_8')],
-          ]),
+          role: 'model',
+          parts: [
+            {
+              text: fallbackMsg,
+            },
+          ],
         },
-      );
+      ];
     }
   }
 
@@ -173,8 +228,16 @@ export class TelegramBookingUpdate {
       return;
     }
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      await ctx.reply(
+        '⚠️ El sistema de IA no está configurado (falta GEMINI_API_KEY en el servidor). Por favor contacta al administrador.',
+      );
+      return;
+    }
+
     if (!ctx.session) ctx.session = {};
-    ctx.session.step = 'AWAITING_DURATION_ENCADENADO';
+    ctx.session.step = 'CHAT_CON_EMPLEADA_ENCADENADO';
     ctx.session.empleadaId = empleadaId;
     ctx.session.servicioPrevioId = servicioActivo.id;
 
@@ -185,27 +248,47 @@ export class TelegramBookingUpdate {
         ).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       : 'próximamente';
 
-    await ctx.reply(
-      `📅 *Reservar Siguiente Turno con ${empleada.nombreArtistico}*\n\n` +
-        `⏰ Hora de inicio estimada: *${horaEstimada}* (puede variar si la empleada extiende su servicio actual)\n\n` +
-        `¿Cuántas horas necesitas?`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('1 Hora', 'enc_duracion_1'),
-            Markup.button.callback('2 Horas', 'enc_duracion_2'),
-            Markup.button.callback('3 Horas', 'enc_duracion_3'),
-          ],
-          [
-            Markup.button.callback('4 Horas', 'enc_duracion_4'),
-            Markup.button.callback('5 Horas', 'enc_duracion_5'),
-            Markup.button.callback('6 Horas', 'enc_duracion_6'),
-          ],
-          [Markup.button.callback('8 Horas', 'enc_duracion_8')],
-        ]),
-      },
-    );
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+Tarifa por hora: $${empleada.precioBaseHora}/hr.
+Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+
+Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
+Este servicio es en modalidad de *Cita Reservada / Encadenada*, lo que significa que iniciarás este servicio después de terminar tu servicio actual. Tu hora de inicio estimada es aproximadamente a las ${horaEstimada}. Menciona esto alegremente para que el cliente lo tenga claro.
+
+Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
+Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
+1. Primero, pregúntale cuántas horas de servicio desea (duración).
+2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+
+Reglas de comportamiento:
+- Responde siempre manteniéndote en personaje.
+- No inventes los datos; pídelos educadamente y uno por uno.
+- Mantén tus respuestas cortas y claras.
+- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca JSON en una sola línea:
+[DATA: {"duracion": X, "pago": "Y"}]
+Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').
+
+Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estimada, y pregúntale al cliente únicamente cuántas horas de servicio desea.`;
+
+    const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [
+      { role: 'user', parts: [{ text: 'Hola' }] },
+    ];
+
+    try {
+      const responseText = await this.getGroqResponse(systemPrompt, history);
+      history.push({ role: 'model', parts: [{ text: responseText }] });
+      ctx.session.chatHistory = history;
+
+      await ctx.reply(responseText, { parse_mode: 'Markdown' });
+    } catch (err) {
+      this.logger.error('Error starting LLM chat session (chained):', err);
+      const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}*. Estaré libre aproximadamente a las *${horaEstimada}* para atenderte. ¿Cuántas horas de servicio necesitas?`;
+      await ctx.reply(fallbackMsg, { parse_mode: 'Markdown' });
+      ctx.session.chatHistory = [
+        { role: 'user', parts: [{ text: 'Hola' }] },
+        { role: 'model', parts: [{ text: fallbackMsg }] },
+      ];
+    }
   }
 
   @Action(/^enc_duracion_(\d+(\.\d+)?)$/)
@@ -1273,7 +1356,10 @@ export class TelegramBookingUpdate {
     if (ctx.chat?.type === 'private') {
       try {
         const activeService = await this.serviciosRepository.findOne({
-          where: { clienteTelegramId: telegramId },
+          where: {
+            clienteTelegramId: telegramId,
+            estado: In(['pendiente', 'pendiente_encadenado', 'en_curso']),
+          },
           relations: {
             jefe: true,
             cliente: true,
@@ -1349,9 +1435,75 @@ export class TelegramBookingUpdate {
             );
           }
 
-          await ctx.telegram.sendMessage(grupoTelegramId, text, {
-            message_thread_id: parseInt(activeService.telegramThreadId),
-          });
+          try {
+            await ctx.telegram.sendMessage(grupoTelegramId, text, {
+              message_thread_id: parseInt(activeService.telegramThreadId),
+            });
+          } catch (sendErr: any) {
+            if (
+              sendErr?.response?.description?.includes(
+                'message thread not found',
+              ) ||
+              sendErr?.message?.includes('message thread not found')
+            ) {
+              this.logger.warn(
+                `El tema de foro ${activeService.telegramThreadId} no fue encontrado en el grupo. Recreándolo...`,
+              );
+              const clientName =
+                activeService.cliente?.nombreTelegram ||
+                ctx.from?.first_name ||
+                'Cliente';
+              const topic = await ctx.telegram.createForumTopic(
+                grupoTelegramId,
+                `👤 Cliente: ${clientName}`,
+              );
+              activeService.telegramThreadId =
+                topic.message_thread_id.toString();
+              await this.serviciosRepository.save(activeService);
+
+              const detailsMsg =
+                `📋 *Información del Servicio (Tema Recreado):*\n\n` +
+                `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
+                `• *Empleada:* ${activeService.empleada?.nombreArtistico || 'N/A'}\n` +
+                `• *Duración:* ${activeService.duracionPactadaHoras} horas\n` +
+                `• *Método de Pago:* ${activeService.metodoPago.toUpperCase()}\n` +
+                `• *Tarifa:* $${activeService.precioBaseHoraPactado}/hr\n` +
+                (activeService.notas
+                  ? `• *Ubicación/Notas:* ${activeService.notas}\n`
+                  : '') +
+                `• *Estado:* ${activeService.estado}`;
+
+              const isPendiente =
+                activeService.estado === 'pendiente' ||
+                activeService.estado === 'pendiente_encadenado';
+              const extraOptions: any = {
+                message_thread_id: topic.message_thread_id,
+                parse_mode: 'Markdown',
+              };
+              if (isPendiente) {
+                Object.assign(
+                  extraOptions,
+                  Markup.keyboard([
+                    ['🟢 Aceptar Servicio', '🔴 Rechazar Servicio'],
+                  ])
+                    .resize()
+                    .oneTime(),
+                );
+              }
+              await ctx.telegram.sendMessage(
+                grupoTelegramId,
+                detailsMsg,
+                extraOptions,
+              );
+
+              // Intentar enviar el mensaje original del cliente nuevamente en el nuevo hilo
+              await ctx.telegram.sendMessage(grupoTelegramId, text, {
+                message_thread_id: topic.message_thread_id,
+              });
+            } else {
+              throw sendErr;
+            }
+          }
           return;
         }
       } catch (err) {
@@ -1377,7 +1529,128 @@ export class TelegramBookingUpdate {
       return this.telegramAuthUpdate.onHelp(ctx);
     }
 
-    const step = ctx.session?.step;
+    const session = ctx.session;
+    if (!session) return;
+    const step = session.step;
+
+    if (
+      step === 'CHAT_CON_EMPLEADA' ||
+      step === 'CHAT_CON_EMPLEADA_ENCADENADO'
+    ) {
+      const empleadaId = session.empleadaId;
+      if (!empleadaId) {
+        await ctx.reply(
+          '❌ Sesión inválida. Por favor, selecciona una empleada nuevamente.',
+        );
+        ctx.session = {};
+        return;
+      }
+
+      const empleada = await this.empleadasRepository.findOne({
+        where: { id: empleadaId },
+      });
+
+      if (!empleada) {
+        await ctx.reply('La empleada seleccionada ya no existe en el sistema.');
+        ctx.session = {};
+        return;
+      }
+
+      const userMessage = (ctx.message as { text?: string })?.text || '';
+      if (!userMessage.trim()) return;
+
+      const history = session.chatHistory || [];
+      // Push the user's message to the history
+      history.push({ role: 'user', parts: [{ text: userMessage }] });
+
+      // Build the system prompt
+      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+Tarifa por hora: $${empleada.precioBaseHora}/hr.
+Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+
+Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
+Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
+Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
+1. Primero, pregúntale cuántas horas de servicio desea (duración).
+2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+
+Reglas de comportamiento:
+- Responde siempre manteniéndote en personaje.
+- No inventes los datos; pídelos educadamente.
+- Cuando el cliente te diga la duración y el método de pago, y los tengas DEFINIDOS y CONFIRMADOS, debes incluir exactamente al final de tu respuesta de texto la siguiente marca JSON en una sola línea:
+[DATA: {"duracion": X, "pago": "Y"}]
+Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').`;
+
+      try {
+        let responseText = await this.getGroqResponse(systemPrompt, history);
+
+        // Check if response contains the structured DATA block
+        const dataMatch = responseText.match(/\[DATA:\s*(\{.*?\})\]/);
+
+        if (dataMatch) {
+          try {
+            const parsedData = JSON.parse(dataMatch[1]);
+            if (parsedData.duracion && parsedData.pago) {
+              session.duracionPactadaHoras = parseFloat(parsedData.duracion);
+              session.metodoPago = parsedData.pago;
+
+              // Transition step to AWAITING_LOCATION
+              session.step =
+                step === 'CHAT_CON_EMPLEADA_ENCADENADO'
+                  ? 'AWAITING_LOCATION_ENCADENADO'
+                  : 'AWAITING_LOCATION';
+
+              // Clean the DATA block from the text response
+              responseText = responseText
+                .replace(/\[DATA:\s*\{.*?\}\]/g, '')
+                .trim();
+
+              // Push final response to history
+              history.push({ role: 'model', parts: [{ text: responseText }] });
+              session.chatHistory = history;
+
+              await ctx.reply(responseText, { parse_mode: 'Markdown' });
+
+              // Prompt for location sharing
+              await ctx.reply(
+                `📍 *¡Excelente! Ya tengo los detalles anotados (Duración: ${parsedData.duracion} horas, Pago: ${parsedData.pago.toUpperCase()}).*\n\n` +
+                  `Por último, ¿me compartes tu ubicación con el botón de abajo para registrar tu pedido?`,
+                {
+                  parse_mode: 'Markdown',
+                  ...Markup.keyboard([
+                    [
+                      Markup.button.locationRequest(
+                        '📍 Compartir mi Ubicación',
+                      ),
+                    ],
+                  ])
+                    .oneTime()
+                    .resize(),
+                },
+              );
+              return;
+            }
+          } catch (jsonErr) {
+            this.logger.error(
+              'Failed to parse Gemini extracted JSON data:',
+              jsonErr,
+            );
+          }
+        }
+
+        // Push model response to history
+        history.push({ role: 'model', parts: [{ text: responseText }] });
+        session.chatHistory = history;
+
+        await ctx.reply(responseText, { parse_mode: 'Markdown' });
+      } catch (err) {
+        this.logger.error('Error in LLM booking chat flow:', err);
+        await ctx.reply(
+          '¿Me podrías repetir la duración que necesitas y tu método de pago preferido (efectivo, tarjeta o transferencia)?',
+        );
+      }
+      return;
+    }
 
     if (step === 'AWAITING_DURATION') {
       const text = (ctx.message as { text?: string })?.text || '';
