@@ -798,6 +798,11 @@ export class TelegramBookingUpdate {
           await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
             message_thread_id: topic.message_thread_id,
             parse_mode: 'Markdown',
+            ...Markup.keyboard([
+              ['🟢 Aceptar Servicio', '🔴 Rechazar Servicio'],
+            ])
+              .resize()
+              .oneTime(),
           });
         } catch (err) {
           this.logger.error(
@@ -914,6 +919,9 @@ export class TelegramBookingUpdate {
         await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
           message_thread_id: topic.message_thread_id,
           parse_mode: 'Markdown',
+          ...Markup.keyboard([['🟢 Aceptar Servicio', '🔴 Rechazar Servicio']])
+            .resize()
+            .oneTime(),
         });
       } catch (err) {
         this.logger.error(
@@ -1153,6 +1161,84 @@ export class TelegramBookingUpdate {
       threadId &&
       (ctx.chat?.type === 'supergroup' || ctx.chat?.type === 'group')
     ) {
+      const cleanInput = text.trim();
+      const isAccept = cleanInput === '🟢 Aceptar Servicio';
+      const isReject = cleanInput === '🔴 Rechazar Servicio';
+
+      if (isAccept || isReject) {
+        try {
+          const senderTelegramId = ctx.from?.id.toString();
+          if (!senderTelegramId) return;
+
+          const user = await this.usuariosRepository.findOne({
+            where: { telegramChatId: senderTelegramId },
+          });
+
+          if (!user) {
+            await ctx.reply(
+              '❌ No tienes permisos o no estás registrado en el sistema.',
+            );
+            return;
+          }
+
+          const service = await this.serviciosRepository.findOne({
+            where: {
+              telegramThreadId: threadId.toString(),
+              jefe: {
+                grupoTelegramId: chatId,
+              },
+            },
+            relations: { empleada: true, cliente: true },
+          });
+
+          if (!service) {
+            await ctx.reply(
+              '❌ No se encontró ningún servicio asociado a este hilo.',
+            );
+            return;
+          }
+
+          const isIndependentEmployee =
+            service.empleada &&
+            service.empleada.tipo === 'independiente' &&
+            service.empleada.usuarioId === user.id;
+
+          if (
+            user.rol !== 'jefe' &&
+            user.rol !== 'admin' &&
+            !isIndependentEmployee
+          ) {
+            await ctx.reply(
+              '❌ No tienes permisos para autorizar este servicio.',
+            );
+            return;
+          }
+
+          if (isAccept) {
+            await this.servicesService.aceptar(service.id, user.id);
+            await ctx.reply(
+              `🟢 *Servicio Aceptado* por ${user.email}`,
+              Markup.removeKeyboard(),
+            );
+          } else {
+            await this.servicesService.rechazar(service.id, user.id);
+            await ctx.reply(
+              `🔴 *Servicio Rechazado* por ${user.email}`,
+              Markup.removeKeyboard(),
+            );
+          }
+        } catch (err: any) {
+          this.logger.error(
+            'Error al autorizar servicio por Reply Keyboard:',
+            err,
+          );
+          await ctx.reply(
+            `❌ Error: ${err.message || 'Error al procesar la solicitud.'}`,
+          );
+        }
+        return;
+      }
+
       try {
         const service = await this.serviciosRepository.findOne({
           where: {
@@ -1231,10 +1317,28 @@ export class TelegramBookingUpdate {
                 ? `• *Ubicación/Notas:* ${activeService.notas}\n`
                 : '') +
               `• *Estado:* ${activeService.estado}`;
-            await ctx.telegram.sendMessage(grupoTelegramId, detailsMsg, {
+            const isPendiente =
+              activeService.estado === 'pendiente' ||
+              activeService.estado === 'pendiente_encadenado';
+            const extraOptions: any = {
               message_thread_id: topic.message_thread_id,
               parse_mode: 'Markdown',
-            });
+            };
+            if (isPendiente) {
+              Object.assign(
+                extraOptions,
+                Markup.keyboard([
+                  ['🟢 Aceptar Servicio', '🔴 Rechazar Servicio'],
+                ])
+                  .resize()
+                  .oneTime(),
+              );
+            }
+            await ctx.telegram.sendMessage(
+              grupoTelegramId,
+              detailsMsg,
+              extraOptions,
+            );
           }
 
           await ctx.telegram.sendMessage(grupoTelegramId, text, {
