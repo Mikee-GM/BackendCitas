@@ -9,6 +9,7 @@ import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
+import { Viajes } from '../trips/entities/trip.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { TelegramAuthUpdate } from './telegram-auth.update';
@@ -549,6 +550,25 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
     servicio.duracionFinalHoras = duracionRealStr;
     await this.serviciosRepository.save(servicio);
 
+    // Crear viaje de regreso automático para la empleada
+    try {
+      const viajesRepository =
+        this.serviciosRepository.manager.getRepository(Viajes);
+      const nuevoViajeRegreso = viajesRepository.create({
+        servicioId: servicio.id,
+        choferId: null,
+        tipo: 'regreso',
+        zona: 'domicilio',
+        tarifa: '50.00',
+        estado: 'notificado',
+      });
+      const viajeRegresoGuardado =
+        await viajesRepository.save(nuevoViajeRegreso);
+      await this.servicesService.dispatchViaje(viajeRegresoGuardado.id);
+    } catch (err) {
+      console.error('Error al crear viaje de regreso:', err);
+    }
+
     // Actualizar disponibilidad de la empleada a true (disponible)
     if (servicio.empleadaId) {
       await this.empleadasRepository.update(servicio.empleadaId, {
@@ -704,24 +724,6 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
         'Error al procesar notificaciones de cadena al finalizar:',
         encErr,
       );
-    }
-
-    // 5. Eliminar el tema (hilo) del grupo de Telegram si existe
-    const jefeGrupoId =
-      servicio.jefe?.grupoTelegramId ||
-      servicio.empleada?.jefe?.grupoTelegramId;
-    if (servicio.telegramThreadId && jefeGrupoId) {
-      try {
-        await ctx.telegram.deleteForumTopic(
-          jefeGrupoId,
-          parseInt(servicio.telegramThreadId, 10),
-        );
-      } catch (err) {
-        console.error(
-          'Error al eliminar forum topic al finalizar servicio:',
-          err,
-        );
-      }
     }
   }
 
@@ -1809,14 +1811,84 @@ Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo
         return;
       }
 
+      const sentimentPrompt = `Analiza el siguiente comentario de reseña del cliente sobre el servicio de una empleada y clasifica el sentimiento.
+        Responde estrictamente con un formato JSON en una sola línea. No incluyas explicaciones ni etiquetas markdown.
+        JSON format: {"sentimiento": "positivo" | "neutral" | "negativo", "enojo": true | false, "score": 1 | 2 | 3 | 4 | 5}
+        Definiciones:
+        - "sentimiento": estado de ánimo general del comentario (positivo, neutral o negativo).
+        - "enojo": true si el cliente expresa frustración extrema, ira, molestia o quejas graves que requieren soporte humano inmediato.
+        - "score": una calificación sugerida del 1 al 5 basada exclusivamente en las palabras del comentario.
+
+        Comentario del cliente: "${comments}"`;
+
+      let analysisResult = { sentimiento: 'neutral', enojo: false, score: 2 };
+      try {
+        const responseText = await this.getGroqResponse(sentimentPrompt, []);
+        const jsonMatch = responseText.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) {
+          analysisResult = JSON.parse(jsonMatch[0]);
+        }
+      } catch (err) {
+        console.error('Error al analizar sentimiento con IA:', err);
+      }
+
       const servicioId = ctx.session?.servicioIdCalificacion;
       if (servicioId) {
         const servicio = await this.serviciosRepository.findOne({
           where: { id: servicioId },
+          relations: {
+            cliente: true,
+            empleada: { usuario: true, jefe: true },
+            jefe: true,
+          },
         });
         if (servicio) {
           servicio.comentariosCalificacion = comments;
+
+          // Si el análisis de IA sugiere una calificación y no se definió antes, o si queremos reajustarla:
+          if (!servicio.calificacion) {
+            servicio.calificacion = analysisResult.score;
+          }
+
           await this.serviciosRepository.save(servicio);
+
+          // Si se detecta enojo o frustración grave, alertar al Jefe/Admin de inmediato
+          if (analysisResult.enojo) {
+            const jefeGrupoId =
+              servicio.jefe?.grupoTelegramId ||
+              servicio.empleada?.jefe?.grupoTelegramId;
+            const jefeChatId =
+              servicio.jefe?.telegramChatId ||
+              servicio.empleada?.jefe?.telegramChatId;
+
+            const alertMsg =
+              `⚠️ *ALERTA DE CLIENTE MOLESTO* ⚠️\n\n` +
+              `Un cliente ha dejado una reseña expresando molestia o enojo grave:\n\n` +
+              `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+              `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
+              `• *Calificación:* ${servicio.calificacion} ⭐\n` +
+              `• *Comentario:* "${comments}"\n\n` +
+              `• *Análisis de IA:* Sentimiento: *${analysisResult.sentimiento.toUpperCase()}* (Enojo Detectado)\n\n` +
+              `Por favor, contacta al cliente de inmediato para resolver la situación.`;
+
+            if (jefeGrupoId) {
+              try {
+                await ctx.telegram.sendMessage(jefeGrupoId, alertMsg, {
+                  parse_mode: 'Markdown',
+                });
+              } catch (e) {
+                console.error('Error al enviar alerta a grupo de Jefe:', e);
+              }
+            } else if (jefeChatId) {
+              try {
+                await ctx.telegram.sendMessage(jefeChatId, alertMsg, {
+                  parse_mode: 'Markdown',
+                });
+              } catch (e) {
+                console.error('Error al enviar alerta privada a Jefe:', e);
+              }
+            }
+          }
         }
       }
 
@@ -1867,5 +1939,97 @@ Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo
       `Hola ${client.nombreTelegram || 'Cliente'}. ` +
         `He recibido tu mensaje. Un administrador se pondrá en contacto contigo pronto.`,
     );
+  }
+
+  @Action(/^pedir_prorroga:(.+)$/)
+  async onPedirProrroga(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const match = (ctx as any).match;
+    const servicioId = match[1];
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: {
+        empleada: { usuario: true },
+        viajes: { chofer: { usuario: true } },
+      },
+    });
+
+    if (!servicio) {
+      await ctx.answerCbQuery('❌ Servicio no encontrado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery(
+        '⚠️ Este servicio ya no está en curso o fue cancelado.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    if (servicio.prorrogasUsadas >= 3) {
+      await ctx.answerCbQuery(
+        '❌ Ya has utilizado el máximo de 3 prórrogas permitidas.',
+        { show_alert: true },
+      );
+      return;
+    }
+
+    await ctx.answerCbQuery('Prórroga de 10 minutos concedida.');
+
+    // Incrementar prórrogas usadas
+    servicio.prorrogasUsadas += 1;
+    await this.serviciosRepository.save(servicio);
+
+    // Reiniciar wait timeout a 10 minutos (600,000 ms)
+    this.servicesService.startWaitTimeout(servicio.id, 600000);
+
+    // Notificar al chofer
+    const viajeIda = servicio.viajes.find((v) => v.tipo === 'ida');
+    if (viajeIda && viajeIda.chofer?.usuario?.telegramChatId) {
+      try {
+        await ctx.telegram.sendMessage(
+          viajeIda.chofer.usuario.telegramChatId,
+          `⏳ *Aviso de Demora:* La empleada *${servicio.empleada.nombreArtistico}* ha solicitado una prórroga de 10 minutos (Prórroga ${servicio.prorrogasUsadas} de 3). El tiempo de espera se ha extendido.`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        console.error('Error al notificar al chofer sobre la prórroga:', err);
+      }
+    }
+
+    // Actualizar mensaje de la empleada
+    let originalText = (ctx.callbackQuery?.message as any)?.text || '';
+    // Limpiar alertas de prórroga previas
+    originalText = originalText.replace(/\n\n⚠️ \*Has solicitado.*?\*/g, '');
+
+    const newText =
+      originalText +
+      `\n\n⚠️ *Has solicitado una prórroga. Has usado ${servicio.prorrogasUsadas} de 3 prórrogas.*`;
+
+    // Si aún tiene prórrogas disponibles, mantener el botón. De lo contrario, quitarlo.
+    const inlineButtons: any[][] = [];
+    if (servicio.prorrogasUsadas < 3) {
+      inlineButtons.push([
+        Markup.button.callback(
+          '⏳ Solicitar Prórroga (10 min)',
+          `pedir_prorroga:${servicio.id}`,
+        ),
+      ]);
+    }
+
+    try {
+      await ctx.editMessageText(newText, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard(inlineButtons),
+      });
+    } catch (err) {
+      console.error('Error al editar mensaje de empleada tras prórroga:', err);
+    }
   }
 }

@@ -126,17 +126,27 @@ export class TelegramDriverUpdate {
         .createQueryBuilder()
         .update(Viajes)
         .set({
-          choferId: chofer.id,
           estado: 'aceptado',
           horaAceptacion: new Date(),
         })
-        .where('id = :viajeId AND "chofer_id" IS NULL', { viajeId })
+        .where('id = :viajeId AND chofer_id = :choferId AND estado = :estado', {
+          viajeId,
+          choferId: chofer.id,
+          estado: 'notificado',
+        })
         .execute();
 
-      return updateResult.affected === 1;
+      if (updateResult.affected === 1) {
+        await manager.update(Choferes, chofer.id, { disponible: false });
+        return true;
+      }
+      return false;
     });
 
     if (result) {
+      // Cancelar el timeout de despacho del viaje
+      this.servicesService.clearDispatchTimeout(viajeId);
+
       await ctx.answerCbQuery('✅ ¡Viaje asignado con éxito!', {
         show_alert: true,
       });
@@ -506,8 +516,19 @@ export class TelegramDriverUpdate {
             {
               message_thread_id: threadId,
               parse_mode: 'Markdown',
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    '⏳ Solicitar Prórroga (10 min)',
+                    `pedir_prorroga:${trip.servicio.id}`,
+                  ),
+                ],
+              ]),
             },
           );
+          // Iniciar el timeout de espera de 10 minutos (600,000 ms)
+          this.servicesService.startWaitTimeout(trip.servicio.id, 600000);
+
           // Guardar el ID del mensaje para poder borrarlo después
           trip.telegramEmpleadaMsgChoferLlegadoId =
             sentMsg.message_id.toString();
@@ -753,6 +774,9 @@ export class TelegramDriverUpdate {
     trip.estado = 'en_curso';
     trip.horaInicioViaje = new Date();
     await this.dataSource.getRepository(Viajes).save(trip);
+
+    // Cancelar el timeout de espera de la empleada
+    this.servicesService.clearWaitTimeout(trip.servicioId);
 
     await ctx.answerCbQuery(
       '🟢 Pasajera a bordo. Iniciando trayecto al cliente.',
@@ -1025,7 +1049,13 @@ export class TelegramDriverUpdate {
 
     const trip = await this.dataSource.getRepository(Viajes).findOne({
       where: { id: viajeId },
-      relations: { servicio: { empleada: true, cliente: true } },
+      relations: {
+        servicio: {
+          empleada: { usuario: true, jefe: true },
+          cliente: true,
+          jefe: true,
+        },
+      },
     });
 
     if (!trip) {
@@ -1052,9 +1082,38 @@ export class TelegramDriverUpdate {
     trip.horaFinViaje = new Date();
     await this.dataSource.getRepository(Viajes).save(trip);
 
-    // Actualizar horaInicioServicio del servicio
+    // Marcar chofer como disponible nuevamente
+    chofer.disponible = true;
+    await this.dataSource.getRepository(Choferes).save(chofer);
+
+    // Actualizar tiempos en el servicio correspondiente
     if (trip.servicio) {
-      trip.servicio.horaInicioServicio = new Date();
+      if (trip.tipo === 'ida') {
+        trip.servicio.horaInicioServicio = new Date();
+      } else {
+        trip.servicio.horaLlegadaCasa = new Date();
+
+        // Eliminar el tema (hilo) del grupo de Telegram si es viaje de regreso (final del servicio completo)
+        const jefeGrupoId =
+          trip.servicio.jefe?.grupoTelegramId ||
+          trip.servicio.empleada?.jefe?.grupoTelegramId;
+        if (trip.servicio.telegramThreadId && jefeGrupoId) {
+          try {
+            await ctx.telegram.deleteForumTopic(
+              jefeGrupoId,
+              parseInt(trip.servicio.telegramThreadId, 10),
+            );
+            console.log(
+              `[onConfChoferFinalizoViaje] Forum topic ${trip.servicio.telegramThreadId} eliminado con éxito.`,
+            );
+          } catch (err) {
+            console.error(
+              'Error al eliminar forum topic al finalizar viaje de regreso:',
+              err,
+            );
+          }
+        }
+      }
       await this.dataSource.getRepository(Servicios).save(trip.servicio);
     }
 
@@ -1063,6 +1122,7 @@ export class TelegramDriverUpdate {
     const messageText =
       `✅ *¡Viaje Finalizado!* 🏁\n\n` +
       `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+      `• *Tipo de Viaje:* ${trip.tipo === 'ida' ? 'Ida' : 'Regreso'}\n` +
       `• *Hora Fin:* ${trip.horaFinViaje.toLocaleTimeString()}\n\n` +
       `¡Buen trabajo! El trayecto ha sido registrado en el sistema.`;
 
@@ -1074,8 +1134,8 @@ export class TelegramDriverUpdate {
       console.error('Error actualizando mensaje de finalización:', err);
     }
 
-    // Notificar al cliente que la empleada ha llegado
-    if (trip.servicio?.cliente?.telegramChatId) {
+    // Notificar al cliente que la empleada ha llegado (únicamente para viajes de ida)
+    if (trip.tipo === 'ida' && trip.servicio?.cliente?.telegramChatId) {
       try {
         await ctx.telegram.sendMessage(
           trip.servicio.cliente.telegramChatId,
@@ -1141,5 +1201,37 @@ export class TelegramDriverUpdate {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(inlineButtons),
     });
+  }
+
+  @Action(/^r_v_o:(.+)$/)
+  async onRechazarViajeOferta(@Ctx() ctx: Context) {
+    const clickerTelegramId = ctx.from?.id.toString();
+    if (!clickerTelegramId) return;
+
+    const match = (ctx as any).match;
+    const viajeId = match[1];
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: clickerTelegramId },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      await ctx.answerCbQuery('❌ Acción no permitida.', { show_alert: true });
+      return;
+    }
+
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({
+      where: { usuarioId: user.id },
+    });
+
+    if (!chofer) {
+      await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCbQuery('Oferta rechazada.');
+    await this.servicesService.rechazarOfertaManual(viajeId, chofer.id);
   }
 }

@@ -16,14 +16,33 @@ import { RealtimeEventsService } from '../realtime/realtime.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
+import { Choferes } from '../drivers/entities/driver.entity';
 
 @Injectable()
 export class ServicesService implements OnModuleInit {
+  private waitTimeouts = new Map<string, NodeJS.Timeout>();
+  private dispatchTimeouts = new Map<string, NodeJS.Timeout>();
+
+  clearDispatchTimeout(viajeId: string) {
+    const existing = this.dispatchTimeouts.get(viajeId);
+    console.log(
+      `[clearDispatchTimeout] Viaje: ${viajeId}, Existe timeout: ${!!existing}`,
+    );
+    if (existing) {
+      clearTimeout(existing);
+      this.dispatchTimeouts.delete(viajeId);
+    }
+  }
+
   constructor(
     @InjectRepository(Servicios)
     private readonly serviciosRepository: Repository<Servicios>,
     @InjectRepository(Viajes)
     private readonly viajesRepository: Repository<Viajes>,
+    @InjectRepository(Choferes)
+    private readonly choferesRepository: Repository<Choferes>,
+    @InjectRepository(Usuarios)
+    private readonly usuariosRepository: Repository<Usuarios>,
     private readonly realtimeEventsService: RealtimeEventsService,
     @InjectBot() private readonly bot: Telegraf<Context>,
     @Inject(forwardRef(() => TelegramService))
@@ -260,31 +279,14 @@ export class ServicesService implements OnModuleInit {
       }
     }
 
-    // 5. Enviar mensaje al grupo de choferes en Telegram
-    const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
-    if (driversGroupId) {
-      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${servicio.ubicacionClienteLat},${servicio.ubicacionClienteLng}`;
-      const messageText =
-        `📢 *¡Nuevo Viaje Disponible!* 🚗\n\n` +
-        `• *Empleada:* ${servicio.empleada.nombreArtistico}\n` +
-        `• *Destino (Cliente):* [Ver en Mapa](${mapsUrl})\n` +
-        `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
-        `• *Notas/Ubicación:* ${servicio.notas || 'Sin notas adicionales'}\n\n` +
-        `Presiona el botón de abajo para tomar este viaje de forma inmediata.`;
-
-      try {
-        await this.bot.telegram.sendMessage(driversGroupId, messageText, {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            Markup.button.callback(
-              '🚗 Aceptar Viaje',
-              `aceptar_viaje:${viajeGuardado.id}`,
-            ),
-          ]),
-        });
-      } catch (err) {
-        console.error('Error al enviar mensaje al grupo de choferes:', err);
-      }
+    // 5. Iniciar despacho de choferes por proximidad
+    try {
+      await this.dispatchViaje(viajeGuardado.id);
+    } catch (dispatchErr) {
+      console.error(
+        'Error al iniciar despacho de choferes por proximidad:',
+        dispatchErr,
+      );
     }
 
     return servicio;
@@ -519,6 +521,436 @@ export class ServicesService implements OnModuleInit {
             err,
           );
         }
+      }
+    }
+  }
+
+  async dispatchViaje(viajeId: string): Promise<void> {
+    this.clearDispatchTimeout(viajeId);
+
+    const viaje = await this.viajesRepository.findOne({
+      where: { id: viajeId },
+      relations: {
+        servicio: {
+          empleada: { usuario: true },
+          cliente: true,
+        },
+      },
+    });
+
+    if (!viaje) {
+      console.error(`[dispatchViaje] Viaje ${viajeId} no encontrado.`);
+      return;
+    }
+
+    // Si el viaje ya no está en estado "notificado", detenemos el despacho
+    if (viaje.estado !== 'notificado') {
+      return;
+    }
+
+    let searchLat: number;
+    let searchLng: number;
+
+    if (viaje.tipo === 'ida') {
+      if (
+        !viaje.servicio?.empleada?.ubicacionLat ||
+        !viaje.servicio?.empleada?.ubicacionLng
+      ) {
+        console.error(
+          `[dispatchViaje] Ubicación de empleada faltante para viaje ${viajeId}.`,
+        );
+        return;
+      }
+      searchLat = parseFloat(viaje.servicio.empleada.ubicacionLat);
+      searchLng = parseFloat(viaje.servicio.empleada.ubicacionLng);
+    } else {
+      if (
+        !viaje.servicio?.ubicacionClienteLat ||
+        !viaje.servicio?.ubicacionClienteLng
+      ) {
+        console.error(
+          `[dispatchViaje] Ubicación de cliente faltante para viaje de regreso ${viajeId}.`,
+        );
+        return;
+      }
+      searchLat = parseFloat(viaje.servicio.ubicacionClienteLat);
+      searchLng = parseFloat(viaje.servicio.ubicacionClienteLng);
+    }
+
+    // Obtener lista de IDs de choferes ya notificados en este viaje
+    const notificadosIds: string[] = Array.isArray(viaje.choferesNotificados)
+      ? viaje.choferesNotificados
+      : [];
+
+    // Buscar el chofer disponible más cercano que no haya sido notificado
+    const query = this.choferesRepository
+      .createQueryBuilder('chofer')
+      .innerJoinAndSelect('chofer.usuario', 'usuario')
+      .where('chofer.disponible = :disponible', { disponible: true })
+      .andWhere('usuario.telegramChatId IS NOT NULL')
+      .andWhere('chofer.ubicacionLat IS NOT NULL')
+      .andWhere('chofer.ubicacionLng IS NOT NULL');
+
+    if (notificadosIds.length > 0) {
+      query.andWhere('chofer.id NOT IN (:...notificadosIds)', {
+        notificadosIds,
+      });
+    }
+
+    const result = await query
+      .select([
+        'chofer.id',
+        'chofer.nombre',
+        'chofer.telefono',
+        'chofer.ubicacionLat',
+        'chofer.ubicacionLng',
+        'usuario.telegramChatId',
+      ])
+      .addSelect(
+        'calcular_distancia_haversine(:lat, :lng, CAST(chofer.ubicacion_lat AS double precision), CAST(chofer.ubicacion_lng AS double precision))',
+        'distancia',
+      )
+      .setParameter('lat', searchLat)
+      .setParameter('lng', searchLng)
+      .orderBy('distancia', 'ASC')
+      .getRawAndEntities();
+
+    if (result.entities.length === 0) {
+      console.log(
+        `[dispatchViaje] No hay choferes disponibles para el viaje ${viajeId}.`,
+      );
+      return;
+    }
+
+    const nearestDriver = result.entities[0];
+    const nearestRaw = result.raw[0];
+    const distancia = parseFloat(nearestRaw.distancia);
+
+    // Actualizar viaje con el chofer asignado temporalmente, agregar a la lista de notificados
+    viaje.choferId = nearestDriver.id;
+    viaje.choferesNotificados = [...notificadosIds, nearestDriver.id];
+    viaje.horaNotificacion = new Date();
+    await this.viajesRepository.save(viaje);
+
+    // Enviar mensaje al chofer por privado
+    const driverChatId = nearestDriver.usuario.telegramChatId;
+    if (driverChatId) {
+      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${searchLat},${searchLng}`;
+      let messageText = '';
+
+      if (viaje.tipo === 'ida') {
+        messageText =
+          `📢 *¡Oferta de Viaje Disponible (Ida)!* 🚗\n\n` +
+          `• *Pasajera (Empleada):* ${viaje.servicio.empleada.nombreArtistico}\n` +
+          `• *Punto de Recogida:* [Ver en Mapa](${mapsUrl})\n` +
+          `• *Distancia a ti:* ${distancia.toFixed(2)} km\n` +
+          `• *Duración del Servicio:* ${viaje.servicio.duracionPactadaHoras} horas\n\n` +
+          `⚠️ Tienes *2 minutos* para aceptar esta oferta antes de que pase al siguiente chofer más cercano.`;
+      } else {
+        const empDestName = viaje.servicio.empleada.nombreArtistico;
+        messageText =
+          `📢 *¡Oferta de Viaje Disponible (Regreso)!* 🚗\n\n` +
+          `• *Pasajera (Empleada):* ${empDestName}\n` +
+          `• *Punto de Recogida (Cliente):* [Ver en Mapa](${mapsUrl})\n` +
+          `• *Distancia a ti:* ${distancia.toFixed(2)} km\n\n` +
+          `⚠️ Tienes *2 minutos* para aceptar esta oferta antes de que pase al siguiente chofer más cercano.`;
+      }
+
+      try {
+        const sentMsg = await this.bot.telegram.sendMessage(
+          driverChatId,
+          messageText,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '🚗 Aceptar Viaje',
+                  `c_ac_v:${viaje.id}:${driverChatId}`,
+                ),
+                Markup.button.callback(
+                  '❌ Rechazar Oferta',
+                  `r_v_o:${viaje.id}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        viaje.telegramChoferMsgOfertaId = sentMsg.message_id.toString();
+        await this.viajesRepository.save(viaje);
+      } catch (err) {
+        console.error(
+          `[dispatchViaje] Error enviando mensaje a Telegram de chofer ${nearestDriver.id}:`,
+          err,
+        );
+        await this.rechazarOfertaManual(viaje.id, nearestDriver.id);
+        return;
+      }
+    }
+
+    // Configurar Timeout de 2 minutos (120000 ms) para expirar la oferta si no responde
+    const timeout = setTimeout(async () => {
+      try {
+        const checkViaje = await this.viajesRepository.findOne({
+          where: { id: viajeId },
+        });
+        if (
+          checkViaje &&
+          checkViaje.estado === 'notificado' &&
+          checkViaje.choferId === nearestDriver.id
+        ) {
+          console.log(
+            `[dispatchViaje] Oferta expirada por timeout para viaje ${viajeId}, chofer ${nearestDriver.id}`,
+          );
+          await this.expirarOfertaYContinuar(viajeId, nearestDriver.id);
+        }
+      } catch (timeoutErr) {
+        console.error(
+          `[dispatchViaje] Error en timeout de viaje ${viajeId}:`,
+          timeoutErr,
+        );
+      }
+    }, 120000);
+    this.dispatchTimeouts.set(viajeId, timeout);
+    console.log(`[dispatchViaje] Timeout establecido para viaje ${viajeId}`);
+  }
+
+  async expirarOfertaYContinuar(
+    viajeId: string,
+    choferId: string,
+  ): Promise<void> {
+    this.clearDispatchTimeout(viajeId);
+
+    const viaje = await this.viajesRepository.findOne({
+      where: { id: viajeId },
+      relations: { chofer: { usuario: true } },
+    });
+
+    if (viaje && viaje.estado === 'notificado' && viaje.choferId === choferId) {
+      const driverChatId = viaje.chofer?.usuario?.telegramChatId;
+      if (driverChatId && viaje.telegramChoferMsgOfertaId) {
+        try {
+          await this.bot.telegram.editMessageText(
+            driverChatId,
+            parseInt(viaje.telegramChoferMsgOfertaId, 10),
+            undefined,
+            `⏰ *Oferta expirada.*\nNo respondiste a tiempo y el viaje ha sido ofrecido al siguiente chofer disponible.`,
+          );
+        } catch (editErr) {
+          console.error(`Error al editar mensaje de oferta expirada:`, editErr);
+        }
+      }
+
+      viaje.choferId = null;
+      viaje.telegramChoferMsgOfertaId = null;
+      await this.viajesRepository.save(viaje);
+
+      await this.dispatchViaje(viajeId);
+    }
+  }
+
+  async rechazarOfertaManual(viajeId: string, choferId: string): Promise<void> {
+    this.clearDispatchTimeout(viajeId);
+
+    const viaje = await this.viajesRepository.findOne({
+      where: { id: viajeId },
+      relations: { chofer: { usuario: true } },
+    });
+
+    if (viaje && viaje.estado === 'notificado' && viaje.choferId === choferId) {
+      const driverChatId = viaje.chofer?.usuario?.telegramChatId;
+      if (driverChatId && viaje.telegramChoferMsgOfertaId) {
+        try {
+          await this.bot.telegram.editMessageText(
+            driverChatId,
+            parseInt(viaje.telegramChoferMsgOfertaId, 10),
+            undefined,
+            `❌ *Has rechazado esta oferta de viaje.*`,
+          );
+        } catch (editErr) {
+          console.error(
+            `Error al editar mensaje de oferta rechazada:`,
+            editErr,
+          );
+        }
+      }
+
+      viaje.choferId = null;
+      viaje.telegramChoferMsgOfertaId = null;
+      await this.viajesRepository.save(viaje);
+
+      await this.dispatchViaje(viajeId);
+    }
+  }
+
+  startWaitTimeout(servicioId: string, durationMs: number = 600000) {
+    this.clearWaitTimeout(servicioId);
+
+    const timeout = setTimeout(async () => {
+      try {
+        await this.handleWaitTimeoutExpired(servicioId);
+      } catch (err) {
+        console.error(
+          `Error handling wait timeout for service ${servicioId}:`,
+          err,
+        );
+      }
+    }, durationMs);
+
+    this.waitTimeouts.set(servicioId, timeout);
+  }
+
+  clearWaitTimeout(servicioId: string) {
+    const existing = this.waitTimeouts.get(servicioId);
+    if (existing) {
+      clearTimeout(existing);
+      this.waitTimeouts.delete(servicioId);
+    }
+  }
+
+  async handleWaitTimeoutExpired(servicioId: string): Promise<void> {
+    this.waitTimeouts.delete(servicioId);
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: {
+        empleada: { usuario: true },
+        cliente: true,
+        viajes: true,
+      },
+    });
+
+    if (!servicio || servicio.estado !== 'en_curso') {
+      return;
+    }
+
+    const viajeIda = servicio.viajes.find((v) => v.tipo === 'ida');
+    if (
+      !viajeIda ||
+      viajeIda.estado === 'en_curso' ||
+      viajeIda.estado === 'finalizado'
+    ) {
+      return;
+    }
+
+    console.log(
+      `[handleWaitTimeoutExpired] Expiró tiempo de espera para servicio ${servicioId}. Prórrogas usadas: ${servicio.prorrogasUsadas}`,
+    );
+
+    await this.cancelarServicioPorDemora(servicioId);
+  }
+
+  async cancelarServicioPorDemora(servicioId: string): Promise<void> {
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: {
+        empleada: { usuario: true },
+        cliente: true,
+        viajes: true,
+      },
+    });
+
+    if (!servicio || servicio.estado !== 'en_curso') return;
+
+    servicio.estado = 'cancelado';
+    await this.serviciosRepository.save(servicio);
+
+    const viajeIda = servicio.viajes.find((v) => v.tipo === 'ida');
+    if (viajeIda) {
+      viajeIda.estado = 'cancelado';
+      await this.viajesRepository.save(viajeIda);
+
+      if (viajeIda.choferId) {
+        const chofer = await this.choferesRepository.findOne({
+          where: { id: viajeIda.choferId },
+          relations: { usuario: true },
+        });
+        if (chofer && chofer.usuario?.telegramChatId) {
+          try {
+            await this.bot.telegram.sendMessage(
+              chofer.usuario.telegramChatId,
+              `❌ *Servicio Cancelado:*\nEl viaje ha sido cancelado automáticamente debido a la demora de la empleada. Estás libre para tomar otros viajes.`,
+              { parse_mode: 'Markdown' },
+            );
+          } catch (err) {
+            console.error('Error al notificar al chofer de cancelación:', err);
+          }
+        }
+      }
+    }
+
+    await this.serviciosRepository.manager
+      .getRepository(Empleadas)
+      .update(servicio.empleadaId, { disponible: true });
+
+    const empUser = servicio.empleada?.usuario;
+    if (empUser) {
+      const isIndependent = servicio.empleada?.tipo === 'independiente';
+      const targetChatId = isIndependent
+        ? empUser.grupoTelegramId
+        : empUser.telegramChatId;
+      const threadId =
+        isIndependent && servicio.telegramThreadId
+          ? parseInt(servicio.telegramThreadId, 10)
+          : undefined;
+
+      if (targetChatId) {
+        try {
+          await this.bot.telegram.sendMessage(
+            targetChatId,
+            `❌ *Servicio Cancelado por Tardanza:*\nSe agotó el tiempo de espera límite y no abordaste el vehículo. El servicio con el cliente ha sido cancelado.`,
+            { message_thread_id: threadId, parse_mode: 'Markdown' },
+          );
+        } catch (err) {
+          console.error('Error al notificar a empleada de cancelación:', err);
+        }
+      }
+    }
+
+    if (servicio.cliente?.telegramChatId) {
+      try {
+        await this.bot.telegram.sendMessage(
+          servicio.cliente.telegramChatId,
+          `❌ *Servicio Cancelado:*\nLamentamos informarte que la empleada *${servicio.empleada.nombreArtistico}* no pudo estar disponible a tiempo y el servicio ha sido cancelado.\n\n` +
+            `Te recomendamos ver otras opciones de empleadas disponibles ahora mismo:`,
+          { parse_mode: 'Markdown' },
+        );
+
+        const disponibles = await this.serviciosRepository.manager
+          .getRepository(Empleadas)
+          .find({
+            where: { disponible: true, catalogoActivo: true },
+            take: 3,
+          });
+
+        if (disponibles.length > 0) {
+          for (const emp of disponibles) {
+            await this.bot.telegram.sendMessage(
+              servicio.cliente.telegramChatId,
+              `👩‍🍳 *${emp.nombreArtistico}*\n` +
+                `• Tarifa: $${emp.precioBaseHora}/hr\n` +
+                `• Descripción: ${emp.descripcion || 'Sin descripción'}`,
+              {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                  [
+                    Markup.button.callback(
+                      '🤝 Contratar a ella',
+                      `contratar_empleada:${emp.id}`,
+                    ),
+                  ],
+                ]),
+              },
+            );
+          }
+        } else {
+          await this.bot.telegram.sendMessage(
+            servicio.cliente.telegramChatId,
+            `Lo sentimos, no hay otras empleadas disponibles en este momento. Por favor, intenta de nuevo más tarde.`,
+          );
+        }
+      } catch (err) {
+        console.error('Error al notificar al cliente de cancelación:', err);
       }
     }
   }

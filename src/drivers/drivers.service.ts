@@ -126,4 +126,41 @@ export class DriversService {
     await this.choferesRepository.delete(id);
     return { deleted: true };
   }
+
+  async findAvailableDriversOrderByDistance(
+    lat: number,
+    lng: number,
+  ): Promise<{ chofer: Choferes; distancia: number }[]> {
+    const result = await this.choferesRepository
+      .createQueryBuilder('chofer')
+      .innerJoinAndSelect('chofer.usuario', 'usuario')
+      .where('chofer.disponible = :disponible', { disponible: true })
+      .andWhere('usuario.telegramChatId IS NOT NULL')
+      .andWhere('chofer.ubicacionLat IS NOT NULL')
+      .andWhere('chofer.ubicacionLng IS NOT NULL')
+      .select([
+        'chofer.id',
+        'chofer.nombre',
+        'chofer.telefono',
+        'chofer.ubicacionLat',
+        'chofer.ubicacionLng',
+        'usuario.telegramChatId',
+      ])
+      .addSelect(
+        'calcular_distancia_haversine(:lat, :lng, CAST(chofer.ubicacion_lat AS double precision), CAST(chofer.ubicacion_lng AS double precision))',
+        'distancia',
+      )
+      .setParameter('lat', lat)
+      .setParameter('lng', lng)
+      .orderBy('distancia', 'ASC')
+      .getRawAndEntities();
+
+    return result.entities.map((entity, index) => {
+      const raw = result.raw[index];
+      return {
+        chofer: entity,
+        distancia: parseFloat(raw.distancia),
+      };
+    });
+  }
 }

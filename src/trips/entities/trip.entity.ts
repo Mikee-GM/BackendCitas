@@ -92,6 +92,18 @@ export class Viajes {
   })
   telegramEmpleadaMsgChoferLlegadoId: string | null;
 
+  @Column('jsonb', {
+    name: 'choferes_notificados',
+    default: () => "'[]'::jsonb",
+  })
+  choferesNotificados: string[];
+
+  @Column('varchar', {
+    name: 'telegram_chofer_msg_oferta_id',
+    nullable: true,
+  })
+  telegramChoferMsgOfertaId: string | null;
+
   @ManyToOne(() => Choferes, (choferes) => choferes.viajes, {
     onDelete: 'RESTRICT',
     nullable: true,
