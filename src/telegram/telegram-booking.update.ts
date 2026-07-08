@@ -137,7 +137,7 @@ export class TelegramBookingUpdate {
     ctx.session.step = 'CHAT_CON_EMPLEADA';
     ctx.session.empleadaId = empleadaId;
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que trabaja por dinero, que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona carismática'}.
 
@@ -248,7 +248,7 @@ Por favor, preséntate, saluda de forma cariñosa y pregúntale al cliente únic
         ).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       : 'próximamente';
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona carismática'}.
 
@@ -438,6 +438,56 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
 
   @Action(/^finalizar_servicio:(.+)$/)
   async onFinalizarServicio(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
+    if (!servicio) {
+      await ctx.answerCbQuery('❌ Servicio no encontrado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado === 'finalizado') {
+      await ctx.answerCbQuery('⚠️ Este servicio ya fue finalizado.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    const originalText = (ctx.callbackQuery?.message as any)?.text || '';
+    if (originalText.includes('⚠️ ¿Confirmas')) {
+      return;
+    }
+
+    const warnHeader = `⚠️ *¿Confirmas que deseas FINALIZAR este servicio? Esta acción no se puede deshacer.*\n\n`;
+
+    await ctx.editMessageText(warnHeader + originalText, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '✅ Sí, finalizar',
+            `conf_fin_serv:${servicioId}`,
+          ),
+          Markup.button.callback('❌ Cancelar', `canc_fin_serv:${servicioId}`),
+        ],
+      ]),
+    });
+  }
+
+  @Action(/^conf_fin_serv:(.+)$/)
+  async onConfFinalizarServicio(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
@@ -655,6 +705,51 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
         encErr,
       );
     }
+
+    // 5. Eliminar el tema (hilo) del grupo de Telegram si existe
+    const jefeGrupoId =
+      servicio.jefe?.grupoTelegramId ||
+      servicio.empleada?.jefe?.grupoTelegramId;
+    if (servicio.telegramThreadId && jefeGrupoId) {
+      try {
+        await ctx.telegram.deleteForumTopic(
+          jefeGrupoId,
+          parseInt(servicio.telegramThreadId, 10),
+        );
+      } catch (err) {
+        console.error(
+          'Error al eliminar forum topic al finalizar servicio:',
+          err,
+        );
+      }
+    }
+  }
+
+  @Action(/^canc_fin_serv:(.+)$/)
+  async onCancFinalizarServicio(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Cancelado.');
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+
+    let originalText = (ctx.callbackQuery?.message as any)?.text || '';
+    // Limpiar el encabezado de advertencia si existe
+    originalText = originalText.replace(
+      /⚠️ \*?¿Confirmas que deseas FINALIZAR este servicio\? Esta acción no se puede deshacer\.\*?\n\n/,
+      '',
+    );
+
+    await ctx.editMessageText(originalText, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '🏁 Finalizar Servicio',
+            `finalizar_servicio:${servicioId}`,
+          ),
+        ],
+      ]),
+    });
   }
 
   @Action(/^calificar_servicio:(.+):([1-5])$/)
@@ -854,6 +949,7 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
         clienteTelegramId: telegramId,
         iaActiva: false,
       });
+      await this.serviciosRepository.save(nuevoServicioEnc);
 
       const jefeUser = await this.usuariosRepository.findOne({
         where: { id: jefeId },
@@ -881,11 +977,18 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
           await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
             message_thread_id: topic.message_thread_id,
             parse_mode: 'Markdown',
-            ...Markup.keyboard([
-              ['🟢 Aceptar Servicio', '🔴 Rechazar Servicio'],
-            ])
-              .resize()
-              .oneTime(),
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '🟢 Aceptar',
+                  `jefe_autorizar:${nuevoServicioEnc.id}:1`,
+                ),
+                Markup.button.callback(
+                  '🔴 Rechazar',
+                  `jefe_autorizar:${nuevoServicioEnc.id}:0`,
+                ),
+              ],
+            ]),
           });
           await ctx.telegram.sendLocation(
             jefeUser.grupoTelegramId,
@@ -982,6 +1085,7 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
       clienteTelegramId: telegramId,
       iaActiva: false,
     });
+    await this.serviciosRepository.save(nuevoServicio);
 
     const jefeUser = await this.usuariosRepository.findOne({
       where: { id: jefeId },
@@ -1008,9 +1112,18 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
         await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
           message_thread_id: topic.message_thread_id,
           parse_mode: 'Markdown',
-          ...Markup.keyboard([['🟢 Aceptar Servicio', '🔴 Rechazar Servicio']])
-            .resize()
-            .oneTime(),
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '🟢 Aceptar',
+                `jefe_autorizar:${nuevoServicio.id}:1`,
+              ),
+              Markup.button.callback(
+                '🔴 Rechazar',
+                `jefe_autorizar:${nuevoServicio.id}:0`,
+              ),
+            ],
+          ]),
         });
         await ctx.telegram.sendLocation(
           jefeUser.grupoTelegramId,
@@ -1564,7 +1677,7 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
       history.push({ role: 'user', parts: [{ text: userMessage }] });
 
       // Build the system prompt
-      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer amable pero coqueta. Quiero que le respondas de manera provocativa al cliente.
+      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que trabaja por dinero, que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona carismática'}.
 

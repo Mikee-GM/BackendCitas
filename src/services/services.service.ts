@@ -47,10 +47,7 @@ export class ServicesService implements OnModuleInit {
           }
         }
       } catch (err) {
-        console.error(
-          'Error auto-assigning jefeId for employee:',
-          err,
-        );
+        console.error('Error auto-assigning jefeId for employee:', err);
       }
     }
 
@@ -205,27 +202,39 @@ export class ServicesService implements OnModuleInit {
       empUser.telegramChatId !== '111111111'
     ) {
       try {
-        const empMsg = await this.bot.telegram.sendMessage(
-          empUser.telegramChatId,
-          `💼 *¡Servicio en Curso!* 🟢\n\n` +
-            `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-            `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
-            `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
-            `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`,
-          {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback(
-                  '🏁 Finalizar Servicio',
-                  `finalizar_servicio:${servicio.id}`,
-                ),
-              ],
-            ]),
-          },
-        );
-        servicio.telegramEmpleadaMensajeId = empMsg.message_id.toString();
-        await this.serviciosRepository.save(servicio);
+        const isIndependent = servicio.empleada?.tipo === 'independiente';
+        const targetChatId = isIndependent
+          ? empUser.grupoTelegramId
+          : empUser.telegramChatId;
+        const threadId =
+          isIndependent && servicio.telegramThreadId
+            ? parseInt(servicio.telegramThreadId, 10)
+            : undefined;
+
+        if (targetChatId) {
+          const empMsg = await this.bot.telegram.sendMessage(
+            targetChatId,
+            `💼 *¡Servicio en Curso!* 🟢\n\n` +
+              `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+              `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+              `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+              `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`,
+            {
+              message_thread_id: threadId,
+              parse_mode: 'Markdown',
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    '🏁 Finalizar Servicio',
+                    `finalizar_servicio:${servicio.id}`,
+                  ),
+                ],
+              ]),
+            },
+          );
+          servicio.telegramEmpleadaMensajeId = empMsg.message_id.toString();
+          await this.serviciosRepository.save(servicio);
+        }
       } catch (telegramErr) {
         console.error(
           `Error al enviar notificación de Telegram a la empleada (chatId: ${empUser.telegramChatId}):`,
@@ -461,37 +470,49 @@ export class ServicesService implements OnModuleInit {
         await this.serviciosRepository.save(service);
 
         try {
-          await this.bot.telegram.sendMessage(
-            service.empleada.usuario.telegramChatId,
-            `⏳ *Aviso de Finalización* ⏳\n\n` +
-              `Tu servicio está programado para finalizar en aproximadamente 15 minutos.\n\n` +
-              `¿Deseas extender el tiempo del servicio?`,
-            {
-              parse_mode: 'Markdown',
-              ...Markup.inlineKeyboard([
-                [
-                  Markup.button.callback(
-                    '➕ 1 Hora',
-                    `extender_servicio:${service.id}:1`,
-                  ),
-                  Markup.button.callback(
-                    '➕ 2 Horas',
-                    `extender_servicio:${service.id}:2`,
-                  ),
-                ],
-                [
-                  Markup.button.callback(
-                    '➕ 3 Horas',
-                    `extender_servicio:${service.id}:3`,
-                  ),
-                  Markup.button.callback(
-                    '❌ No extender',
-                    `no_extender_servicio:${service.id}`,
-                  ),
-                ],
-              ]),
-            },
-          );
+          const isIndependent = service.empleada?.tipo === 'independiente';
+          const targetChatId = isIndependent
+            ? service.empleada.usuario.grupoTelegramId
+            : service.empleada.usuario.telegramChatId;
+          const threadId =
+            isIndependent && service.telegramThreadId
+              ? parseInt(service.telegramThreadId, 10)
+              : undefined;
+
+          if (targetChatId) {
+            await this.bot.telegram.sendMessage(
+              targetChatId,
+              `⏳ *Aviso de Finalización* ⏳\n\n` +
+                `Tu servicio está programado para finalizar en aproximadamente 15 minutos.\n\n` +
+                `¿Deseas extender el tiempo del servicio?`,
+              {
+                message_thread_id: threadId,
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                  [
+                    Markup.button.callback(
+                      '➕ 1 Hora',
+                      `extender_servicio:${service.id}:1`,
+                    ),
+                    Markup.button.callback(
+                      '➕ 2 Horas',
+                      `extender_servicio:${service.id}:2`,
+                    ),
+                  ],
+                  [
+                    Markup.button.callback(
+                      '➕ 3 Horas',
+                      `extender_servicio:${service.id}:3`,
+                    ),
+                    Markup.button.callback(
+                      '❌ No extender',
+                      `no_extender_servicio:${service.id}`,
+                    ),
+                  ],
+                ]),
+              },
+            );
+          }
         } catch (err) {
           console.error(
             `Error sending extension prompt to employee (chatId: ${service.empleada.usuario.telegramChatId}):`,

@@ -6,6 +6,7 @@ import { Repository, MoreThan } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
+import { Empleadas } from '../employees/entities/employee.entity';
 import { TelegramService } from './telegram.service';
 
 @Update()
@@ -17,6 +18,8 @@ export class TelegramAuthUpdate {
     private readonly usuariosRepository: Repository<Usuarios>,
     @InjectRepository(Clientes)
     private readonly clientesRepository: Repository<Clientes>,
+    @InjectRepository(Empleadas)
+    private readonly empleadasRepository: Repository<Empleadas>,
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
@@ -87,6 +90,7 @@ export class TelegramAuthUpdate {
         '/empleadas - Ver el catálogo de empleadas\n' +
         '/vincular <código> - Vincular cuenta de empleado o chofer\n' +
         '/desvincular - Desvincular tu cuenta de empleado o chofer\n' +
+        '/vincular_grupo - Vincular el grupo de Telegram actual a tu cuenta (Jefes, Admins y Empleadas Independientes)\n' +
         '/help - Ver los comandos de ayuda',
     );
   }
@@ -118,7 +122,7 @@ export class TelegramAuthUpdate {
     if (!user) {
       await ctx.reply(
         'El código de vinculación no es válido o ha expirado. ' +
-          'Por favor solicita un nuevo código desde el Panel de Administración.',
+          'Por favor solicita un nuevo código en el panel.',
       );
       return;
     }
@@ -143,10 +147,8 @@ export class TelegramAuthUpdate {
     await this.usuariosRepository.save(user);
 
     await ctx.reply(
-      `¡Vinculación exitosa!\n` +
-        `Tu cuenta de Telegram ha sido asociada al usuario: ${user.email}\n` +
-        `Rol: ${user.rol.toUpperCase()}\n` +
-        `Ahora puedes interactuar con el bot para tus tareas laborales.`,
+      `🎉 ¡Vinculación exitosa!\n` +
+        `Tu cuenta con correo ${user.email} (Rol: ${user.rol.toUpperCase()}) ahora está vinculada a este Telegram.`,
     );
 
     if (user.rol === 'chofer') {
@@ -157,13 +159,13 @@ export class TelegramAuthUpdate {
             driversGroupId,
             {
               member_limit: 1,
-              expire_date: Math.floor(Date.now() / 1000) + 86400, // Expire in 1 day
+              expire_date: Math.floor(Date.now() / 1000) + 3600, // Expire in 1 hour
             },
           );
           await ctx.reply(
-            `🚗 *Grupo de Choferes:*\n` +
-              `Por favor únete al canal de coordinación mediante este enlace de un solo uso:\n\n` +
-              `${invite.invite_link}`,
+            `🚗 *Grupo de Choferes:*\n\n` +
+              `Por favor únete al grupo oficial de choferes usando el siguiente enlace de un solo uso:\n` +
+              `👉 ${invite.invite_link}`,
             { parse_mode: 'Markdown' },
           );
         } catch (err) {
@@ -196,6 +198,57 @@ export class TelegramAuthUpdate {
 
     await ctx.reply(
       `Tu cuenta (${user.email}) ha sido desvinculada exitosamente de este Telegram.`,
+    );
+  }
+
+  @Command('vincular_grupo')
+  async onVincularGrupo(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user) {
+      await ctx.reply(
+        '❌ No estás registrado o vinculado en el sistema. Vincula tu cuenta personal primero con /vincular <codigo> en el chat privado.',
+      );
+      return;
+    }
+
+    // Permitir jefe, admin o empleada (si es independiente)
+    let isAllowed = user.rol === 'jefe' || user.rol === 'admin';
+    if (user.rol === 'empleada') {
+      const emp = await this.empleadasRepository.findOne({
+        where: { usuarioId: user.id },
+      });
+      if (emp && emp.tipo === 'independiente') {
+        isAllowed = true;
+      }
+    }
+
+    if (!isAllowed) {
+      await ctx.reply(
+        '❌ Solo los Jefes, Administradores o Empleadas Independientes pueden vincular grupos.',
+      );
+      return;
+    }
+
+    const chatType = ctx.chat?.type;
+    const chatId = ctx.chat?.id.toString();
+    if (!chatId || (chatType !== 'group' && chatType !== 'supergroup')) {
+      await ctx.reply(
+        '❌ Este comando debe ejecutarse dentro del grupo de Telegram que deseas vincular.',
+      );
+      return;
+    }
+
+    user.grupoTelegramId = chatId;
+    await this.usuariosRepository.save(user);
+
+    await ctx.reply(
+      `✅ ¡Grupo vinculado con éxito! ID del grupo registrado: ${chatId} para el usuario ${user.email}`,
     );
   }
 
