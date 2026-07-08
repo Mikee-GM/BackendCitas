@@ -11,6 +11,7 @@ import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 
 interface SessionData {
   step?:
@@ -50,6 +51,7 @@ export class TelegramUpdate {
     private readonly servicesService: ServicesService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    private readonly loyaltyService: LoyaltyService,
   ) {}
 
   @Start()
@@ -799,6 +801,23 @@ export class TelegramUpdate {
     servicio.duracionFinalHoras = servicio.duracionPactadaHoras;
     await this.serviciosRepository.save(servicio);
 
+    let loyaltyAward: {
+      pointsEarned: number;
+      pointsBalance: number;
+      tier: { name: string; code: string };
+    } | null = null;
+
+    try {
+      loyaltyAward = await this.loyaltyService.awardForFinalizedService(
+        servicio.id,
+      );
+    } catch (loyaltyErr) {
+      console.error(
+        `Error al otorgar puntos de lealtad para servicio ${servicio.id}:`,
+        loyaltyErr,
+      );
+    }
+
     // Actualizar disponibilidad de la empleada a true (disponible)
     if (servicio.empleadaId) {
       await this.empleadasRepository.update(servicio.empleadaId, {
@@ -853,7 +872,12 @@ export class TelegramUpdate {
         `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
         `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
         `• *Total a Pagar:* $${total}\n` +
-        `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+        `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
+        (loyaltyAward
+          ? `• *Puntos Ganados:* ${loyaltyAward.pointsEarned}\n` +
+            `• *Saldo de Puntos:* ${loyaltyAward.pointsBalance}\n` +
+            `• *Membresía:* ${loyaltyAward.tier.name}\n\n`
+          : '\n') +
         `Por favor, califica el servicio recibido:`;
 
       try {

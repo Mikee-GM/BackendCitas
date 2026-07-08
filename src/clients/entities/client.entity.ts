@@ -1,7 +1,9 @@
-import { Column, Entity, Index, OneToMany } from 'typeorm';
+import { Column, Entity, Index, OneToMany, OneToOne } from 'typeorm';
 import { AlertasClientes } from '../../client-alerts/entities/client-alert.entity';
 import { ConversacionesTelegram } from '../../telegram-conversations/entities/telegram-conversation.entity';
 import { Servicios } from '../../services/entities/service.entity';
+import { ClientMembership } from '../../loyalty/entities/client-membership.entity';
+import { LoyaltyTransaction } from '../../loyalty/entities/loyalty-transaction.entity';
 
 @Index('clientes_pkey', ['id'], { unique: true })
 @Index('clientes_telegram_chat_id_key', ['telegramChatId'], { unique: true })
@@ -50,4 +52,13 @@ export class Clientes {
 
   @OneToMany(() => Servicios, (servicios) => servicios.cliente)
   servicios: Servicios[];
+
+  @OneToMany(
+    () => LoyaltyTransaction,
+    (loyaltyTransaction) => loyaltyTransaction.cliente,
+  )
+  loyaltyTransactions: LoyaltyTransaction[];
+
+  @OneToOne(() => ClientMembership, (membership) => membership.cliente)
+  membership: ClientMembership;
 }

@@ -20,11 +20,13 @@ import { EmployeePhotosModule } from './employee-photos/employee-photos.module';
 import { AuthModule } from './auth/auth.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ApartmentsModule } from './apartments/apartments.module';
+import { LoyaltyModule } from './loyalty/loyalty.module';
 
 @Module({
   imports: [
     AuthModule,
     RealtimeModule,
+    LoyaltyModule,
     ConfigModule.forRoot({
       isGlobal: true,
     }),

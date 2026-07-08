@@ -13,11 +13,13 @@ import { Empleadas } from '../employees/entities/employee.entity';
 import { Servicios } from '../services/entities/service.entity';
 import { AuthModule } from '../auth/auth.module';
 import { ServicesModule } from '../services/services.module';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Usuarios, Clientes, Empleadas, Servicios]),
     AuthModule,
+    LoyaltyModule,
     forwardRef(() => ServicesModule),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule],

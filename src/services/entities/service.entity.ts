@@ -15,6 +15,7 @@ import { Clientes } from '../../clients/entities/client.entity';
 import { Empleadas } from '../../employees/entities/employee.entity';
 import { Usuarios } from '../../users/entities/user.entity';
 import { Viajes } from '../../trips/entities/trip.entity';
+import { LoyaltyTransaction } from '../../loyalty/entities/loyalty-transaction.entity';
 
 @Index('idx_servicios_cliente', ['clienteId'], {})
 @Index('idx_servicios_created_at', ['createdAt'], {})
@@ -221,6 +222,12 @@ export class Servicios {
 
   @OneToMany(() => Viajes, (viajes) => viajes.servicio)
   viajes: Viajes[];
+
+  @OneToMany(
+    () => LoyaltyTransaction,
+    (loyaltyTransaction) => loyaltyTransaction.servicio,
+  )
+  loyaltyTransactions: LoyaltyTransaction[];
 
   /** Servicio previo al que está encadenado este (si aplica) */
   @ManyToOne(() => Servicios, (s) => s.serviciosEncadenados, {
