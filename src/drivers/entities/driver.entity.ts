@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   Column,
   Entity,
@@ -19,18 +20,23 @@ export class Choferes {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
+  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
   id: string;
 
   @Column('uuid', { name: 'usuario_id', unique: true })
+  @ApiProperty({ description: 'Usuario Id', example: '00000000-0000-4000-8000-000000000000' })
   usuarioId: string;
 
   @Column('character varying', { name: 'nombre', length: 255 })
+  @ApiProperty({ description: 'Nombre', example: 'Ejemplo' })
   nombre: string;
 
   @Column('character varying', { name: 'telefono', length: 30 })
+  @ApiProperty({ description: 'Telefono', example: '+525512345678' })
   telefono: string;
 
   @Column('boolean', { name: 'disponible', default: () => 'false' })
+  @ApiProperty({ description: 'Disponible', example: true })
   disponible: boolean;
 
   @Column('numeric', {
@@ -39,6 +45,7 @@ export class Choferes {
     precision: 10,
     scale: 7,
   })
+  @ApiPropertyOptional({ description: 'Ubicacion Lat', example: '19.432608' })
   ubicacionLat: string | null;
 
   @Column('numeric', {
@@ -47,18 +54,21 @@ export class Choferes {
     precision: 10,
     scale: 7,
   })
+  @ApiPropertyOptional({ description: 'Ubicacion Lng', example: '-99.133209' })
   ubicacionLng: string | null;
 
   @Column('timestamp with time zone', {
     name: 'ultima_ubicacion_at',
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Ultima Ubicacion At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   ultimaUbicacionAt: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',
   })
+  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   createdAt: Date;
 
   @Column('character varying', {
@@ -66,6 +76,7 @@ export class Choferes {
     length: 255,
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Vehiculo Marca', example: 'Ejemplo' })
   vehiculoMarca: string | null;
 
   @Column('character varying', {
@@ -73,6 +84,7 @@ export class Choferes {
     length: 255,
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Vehiculo Modelo', example: 'Ejemplo' })
   vehiculoModelo: string | null;
 
   @Column('character varying', {
@@ -80,6 +92,7 @@ export class Choferes {
     length: 255,
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Vehiculo Color', example: 'Ejemplo' })
   vehiculoColor: string | null;
 
   @Column('character varying', {
@@ -87,14 +100,17 @@ export class Choferes {
     length: 50,
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Vehiculo Placa', example: 'Ejemplo' })
   vehiculoPlaca: string | null;
 
   @OneToOne(() => Usuarios, (usuarios) => usuarios.choferes, {
     onDelete: 'CASCADE',
   })
   @JoinColumn([{ name: 'usuario_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Usuario', type: () => Usuarios })
   usuario: Usuarios;
 
   @OneToMany(() => Viajes, (viajes) => viajes.chofer)
+  @ApiProperty({ description: 'Viajes', type: () => [Viajes], example: [] })
   viajes: Viajes[];
 }

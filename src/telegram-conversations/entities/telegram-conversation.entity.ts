@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { Clientes } from '../../clients/entities/client.entity';
 import { Servicios } from '../../services/entities/service.entity';
@@ -13,33 +14,41 @@ export class ConversacionesTelegram {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
+  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
   id: string;
 
   @Column('uuid', { name: 'cliente_id' })
+  @ApiProperty({ description: 'Cliente Id', example: '00000000-0000-4000-8000-000000000000' })
   clienteId: string;
 
   @Column('uuid', { name: 'servicio_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Servicio Id', example: '00000000-0000-4000-8000-000000000000' })
   servicioId: string | null;
 
   @Column('enum', { name: 'emisor', enum: ['ia', 'jefe', 'cliente'] })
+  @ApiProperty({ description: 'Emisor', enum: ['ia', 'jefe', 'cliente'], example: 'ia' })
   emisor: 'ia' | 'jefe' | 'cliente';
 
   @Column('text', { name: 'mensaje' })
+  @ApiProperty({ description: 'Mensaje', example: 'Ejemplo' })
   mensaje: string;
 
   @Column('boolean', { name: 'ia_activa', default: () => 'true' })
+  @ApiProperty({ description: 'Ia Activa', example: true })
   iaActiva: boolean;
 
   @Column('timestamp with time zone', {
     name: 'enviado_at',
     default: () => 'now()',
   })
+  @ApiProperty({ description: 'Enviado At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   enviadoAt: Date;
 
   @ManyToOne(() => Clientes, (clientes) => clientes.conversacionesTelegrams, {
     onDelete: 'CASCADE',
   })
   @JoinColumn([{ name: 'cliente_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Cliente', type: () => Clientes })
   cliente: Clientes;
 
   @ManyToOne(
@@ -48,5 +57,6 @@ export class ConversacionesTelegram {
     { onDelete: 'SET NULL' },
   )
   @JoinColumn([{ name: 'servicio_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Servicio', type: () => Servicios })
   servicio: Servicios;
 }
