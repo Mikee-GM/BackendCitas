@@ -42,6 +42,8 @@ export class EmployeesService {
       fotosExtra,
       tipo,
       jefeId,
+      linkX,
+      contactLabel,
     } = createEmployeeDto;
 
     // 1. Validar que el email no esté registrado
@@ -87,6 +89,8 @@ export class EmployeesService {
         slugCatalogo,
         fotoPerfilUrl: fotoPerfilUrl || null,
         descripcion: descripcion || null,
+        linkX: linkX || null,
+        contactLabel: contactLabel || null,
         precioBaseHora: precioBaseHora.toString(),
         disponible: disponible ?? false,
         catalogoActivo: catalogoActivo ?? true,

@@ -23,10 +23,10 @@ export class ExtrasCatalogo {
   })
   id: string;
 
-  @Column('uuid', { name: 'empleada_id', unique: true })
+  @Column('uuid', { name: 'empleada_id' })
   empleadaId: string;
 
-  @Column('character varying', { name: 'nombre', unique: true, length: 150 })
+  @Column('character varying', { name: 'nombre', length: 150 })
   nombre: string;
 
   @Column('numeric', { name: 'precio', precision: 10, scale: 2 })

@@ -49,6 +49,16 @@ export class Empleadas {
   @Column('text', { name: 'descripcion', nullable: true })
   descripcion: string | null;
 
+  @Column('character varying', { name: 'link_x', nullable: true, length: 255 })
+  linkX: string | null;
+
+  @Column('character varying', {
+    name: 'contact_label',
+    nullable: true,
+    length: 100,
+  })
+  contactLabel: string | null;
+
   @Column('numeric', { name: 'precio_base_hora', precision: 10, scale: 2 })
   precioBaseHora: string;
 

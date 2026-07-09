@@ -90,6 +90,14 @@ export class CreateEmployeeDto {
   @IsOptional()
   readonly jefeId?: string;
 
+  @IsString({ message: 'El enlace de X debe ser una cadena de texto' })
+  @IsOptional()
+  readonly linkX?: string;
+
+  @IsString({ message: 'La etiqueta de contacto debe ser una cadena de texto' })
+  @IsOptional()
+  readonly contactLabel?: string;
+
   @IsArray({ message: 'Las fotos extras deben proporcionarse como un arreglo' })
   @IsString({
     each: true,

@@ -113,7 +113,10 @@ export class TelegramBookingUpdate {
     const match = (ctx as any).match;
     if (!match) return;
     const empleadaId = match[1];
+    await this.startHireSession(ctx, empleadaId);
+  }
 
+  async startHireSession(ctx: any, empleadaId: string) {
     const empleada = await this.empleadasRepository.findOne({
       where: { id: empleadaId },
     });

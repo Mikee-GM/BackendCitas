@@ -17,10 +17,10 @@ export class Prorrogas {
   })
   id: string;
 
-  @Column('uuid', { name: 'servicio_id', unique: true })
+  @Column('uuid', { name: 'servicio_id' })
   servicioId: string;
 
-  @Column('smallint', { name: 'numero_prorroga', unique: true })
+  @Column('smallint', { name: 'numero_prorroga' })
   numeroProrroga: number;
 
   @Column('smallint', { name: 'minutos_solicitados' })

@@ -8,6 +8,7 @@ import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { TelegramService } from './telegram.service';
+import { TelegramBookingUpdate } from './telegram-booking.update';
 
 @Update()
 export class TelegramAuthUpdate {
@@ -23,12 +24,29 @@ export class TelegramAuthUpdate {
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    @Inject(forwardRef(() => TelegramBookingUpdate))
+    private readonly telegramBookingUpdate: TelegramBookingUpdate,
   ) {}
 
   @Start()
   async onStart(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
+
+    // Interceptar deep link start para contratar (ej. /start contratar_ID o contratar_empleada_ID)
+    const text = (ctx.message as any)?.text || '';
+    const parts = text.split(' ');
+    if (parts.length >= 2) {
+      const payload = parts[1];
+      if (payload.startsWith('contratar_')) {
+        let empleadaId = payload.replace('contratar_', '');
+        if (empleadaId.startsWith('empleada_')) {
+          empleadaId = empleadaId.replace('empleada_', '');
+        }
+        await this.telegramBookingUpdate.startHireSession(ctx, empleadaId);
+        return;
+      }
+    }
 
     // Check if the user is a registered system user (employee, admin, etc.)
     const user = await this.usuariosRepository.findOne({

@@ -15,13 +15,13 @@ export class EmpleadaFotos {
   })
   id: string;
 
-  @Column('uuid', { name: 'empleada_id', unique: true })
+  @Column('uuid', { name: 'empleada_id' })
   empleadaId: string;
 
   @Column('text', { name: 'url' })
   url: string;
 
-  @Column('smallint', { name: 'orden', unique: true, default: () => '0' })
+  @Column('smallint', { name: 'orden', default: () => '0' })
   orden: number;
 
   @Column('timestamp with time zone', {
