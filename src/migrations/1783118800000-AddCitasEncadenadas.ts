@@ -4,23 +4,6 @@ export class AddCitasEncadenadas1783118800000 implements MigrationInterface {
   name = 'AddCitasEncadenadas1783118800000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // 1. Add 'pendiente_encadenado' to the estado enum
-    await queryRunner.query(`
-      ALTER TYPE servicios_estado_enum ADD VALUE IF NOT EXISTS 'pendiente_encadenado';
-    `);
-
-    // 2. Add servicio_previo_id column (self-referential FK, nullable)
-    await queryRunner.query(`
-      ALTER TABLE servicios
-        ADD COLUMN IF NOT EXISTS servicio_previo_id UUID REFERENCES servicios(id) ON DELETE SET NULL;
-    `);
-
-    // 3. Add hora_inicio_estimada column (estimated start time, updated dynamically)
-    await queryRunner.query(`
-      ALTER TABLE servicios
-        ADD COLUMN IF NOT EXISTS hora_inicio_estimada TIMESTAMPTZ NULL;
-    `);
-
     // 4. Index for fast lookup of chained services by their predecessor
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS idx_servicios_previo ON servicios (servicio_previo_id)

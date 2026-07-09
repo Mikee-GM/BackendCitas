@@ -116,4 +116,11 @@ export class Empleadas {
   })
   @JoinColumn([{ name: 'apartment_id', referencedColumnName: 'id' }])
   apartment: Apartments;
+
+  @Column('uuid', { name: 'jefe_id', nullable: true })
+  jefeId: string | null;
+
+  @ManyToOne(() => Usuarios, { onDelete: 'SET NULL' })
+  @JoinColumn([{ name: 'jefe_id', referencedColumnName: 'id' }])
+  jefe: Usuarios | null;
 }

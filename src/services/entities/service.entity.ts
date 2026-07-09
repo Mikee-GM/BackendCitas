@@ -143,6 +143,15 @@ export class Servicios {
   @Column('varchar', { name: 'telegram_empleada_mensaje_id', nullable: true })
   telegramEmpleadaMensajeId: string | null;
 
+  @Column('bigint', { name: 'cliente_telegram_id', nullable: true })
+  clienteTelegramId: string | null;
+
+  @Column('boolean', { name: 'ia_activa', default: true })
+  iaActiva: boolean;
+
+  @Column('bigint', { name: 'telegram_thread_id', nullable: true })
+  telegramThreadId: string | null;
+
   @Column('integer', { name: 'calificacion', nullable: true })
   calificacion: number | null;
 
