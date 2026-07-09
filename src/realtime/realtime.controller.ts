@@ -14,8 +14,13 @@ import { Observable } from 'rxjs';
 import { RealtimeEventsService } from './realtime.service';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Choferes } from '../drivers/entities/driver.entity';
+import {
+  ApiControllerDocs,
+  ApiSseTokenDocs,
+} from '../common/swagger/api-docs.decorators';
 
 @Controller('realtime')
+@ApiControllerDocs('realtime')
 export class RealtimeController {
   constructor(
     private readonly realtimeEventsService: RealtimeEventsService,
@@ -35,6 +40,7 @@ export class RealtimeController {
   }
 
   @Sse('sse/jefes')
+  @ApiSseTokenDocs('Conectar canal SSE para panel de jefes')
   sseJefes(@Query('token') token: string): Observable<any> {
     const payload = this.verifyToken(token);
     if (payload.rol !== 'jefe' && payload.rol !== 'admin') {
@@ -44,6 +50,7 @@ export class RealtimeController {
   }
 
   @Sse('sse/empleada')
+  @ApiSseTokenDocs('Conectar canal SSE para empleada autenticada')
   async sseEmpleada(@Query('token') token: string): Promise<Observable<any>> {
     const payload = this.verifyToken(token);
     if (payload.rol !== 'empleada') {
@@ -59,6 +66,7 @@ export class RealtimeController {
   }
 
   @Sse('sse/chofer')
+  @ApiSseTokenDocs('Conectar canal SSE para chofer autenticado')
   async sseChofer(@Query('token') token: string): Promise<Observable<any>> {
     const payload = this.verifyToken(token);
     if (payload.rol !== 'chofer') {

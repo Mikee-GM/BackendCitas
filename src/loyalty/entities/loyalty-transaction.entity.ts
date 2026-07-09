@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { Clientes } from '../../clients/entities/client.entity';
 import { Servicios } from '../../services/entities/service.entity';
@@ -16,24 +17,30 @@ export class LoyaltyTransaction {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
+  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
   id: string;
 
   @Column('uuid', { name: 'cliente_id' })
+  @ApiProperty({ description: 'Cliente Id', example: '00000000-0000-4000-8000-000000000000' })
   clienteId: string;
 
   @Column('uuid', { name: 'servicio_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Servicio Id', example: '00000000-0000-4000-8000-000000000000' })
   servicioId: string | null;
 
   @Column('uuid', { name: 'created_by_user_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Created By User Id', example: '00000000-0000-4000-8000-000000000000' })
   createdByUserId: string | null;
 
   @Column('enum', {
     name: 'type',
     enum: ['earned', 'manual_adjustment', 'tier_assignment', 'reversal'],
   })
+  @ApiProperty({ description: 'Type', enum: ['earned', 'manual_adjustment', 'tier_assignment', 'reversal'], example: 'earned' })
   type: 'earned' | 'manual_adjustment' | 'tier_assignment' | 'reversal';
 
   @Column('integer', { name: 'points' })
+  @ApiProperty({ description: 'Points', example: 1 })
   points: number;
 
   @Column('numeric', {
@@ -42,21 +49,25 @@ export class LoyaltyTransaction {
     scale: 2,
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Amount Basis', example: '1200.00' })
   amountBasis: string | null;
 
   @Column('text', { name: 'description', nullable: true })
+  @ApiPropertyOptional({ description: 'Description', example: 'Ejemplo' })
   description: string | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',
   })
+  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   createdAt: Date;
 
   @ManyToOne(() => Clientes, (cliente) => cliente.loyaltyTransactions, {
     onDelete: 'CASCADE',
   })
   @JoinColumn([{ name: 'cliente_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Cliente', type: () => Clientes })
   cliente: Clientes;
 
   @ManyToOne(() => Servicios, (servicio) => servicio.loyaltyTransactions, {
@@ -64,9 +75,11 @@ export class LoyaltyTransaction {
     nullable: true,
   })
   @JoinColumn([{ name: 'servicio_id', referencedColumnName: 'id' }])
+  @ApiPropertyOptional({ description: 'Servicio', type: () => Servicios })
   servicio: Servicios | null;
 
   @ManyToOne(() => Usuarios, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn([{ name: 'created_by_user_id', referencedColumnName: 'id' }])
+  @ApiPropertyOptional({ description: 'Created By', type: () => Usuarios })
   createdBy: Usuarios | null;
 }

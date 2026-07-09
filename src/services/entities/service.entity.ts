@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   Column,
   Entity,
@@ -30,24 +31,30 @@ export class Servicios {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
+  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
   id: string;
 
   @Column('uuid', { name: 'empleada_id' })
+  @ApiProperty({ description: 'Empleada Id', example: '00000000-0000-4000-8000-000000000000' })
   empleadaId: string;
 
   @Column('uuid', { name: 'cliente_id' })
+  @ApiProperty({ description: 'Cliente Id', example: '00000000-0000-4000-8000-000000000000' })
   clienteId: string;
 
   @Column('uuid', { name: 'jefe_id' })
+  @ApiProperty({ description: 'Jefe Id', example: '00000000-0000-4000-8000-000000000000' })
   jefeId: string;
 
   @Column('enum', {
     name: 'metodo_pago',
     enum: ['efectivo', 'tarjeta', 'transferencia'],
   })
+  @ApiProperty({ description: 'Metodo Pago', enum: ['efectivo', 'tarjeta', 'transferencia'], example: 'efectivo' })
   metodoPago: 'efectivo' | 'tarjeta' | 'transferencia';
 
   @Column('numeric', { name: 'duracion_pactada_horas', precision: 4, scale: 2 })
+  @ApiProperty({ description: 'Duracion Pactada Horas', example: '1200.00' })
   duracionPactadaHoras: string;
 
   @Column('numeric', {
@@ -56,12 +63,15 @@ export class Servicios {
     precision: 4,
     scale: 2,
   })
+  @ApiPropertyOptional({ description: 'Duracion Final Horas', example: '1200.00' })
   duracionFinalHoras: string | null;
 
   @Column('numeric', { name: 'ubicacion_cliente_lat', precision: 10, scale: 7 })
+  @ApiProperty({ description: 'Ubicacion Cliente Lat', example: '19.432608' })
   ubicacionClienteLat: string;
 
   @Column('numeric', { name: 'ubicacion_cliente_lng', precision: 10, scale: 7 })
+  @ApiProperty({ description: 'Ubicacion Cliente Lng', example: '-99.133209' })
   ubicacionClienteLng: string;
 
   @Column('numeric', {
@@ -69,6 +79,7 @@ export class Servicios {
     precision: 10,
     scale: 2,
   })
+  @ApiProperty({ description: 'Precio Base Hora Pactado', example: '1200.00' })
   precioBaseHoraPactado: string;
 
   @Column('numeric', {
@@ -77,6 +88,7 @@ export class Servicios {
     scale: 2,
     default: () => '0',
   })
+  @ApiProperty({ description: 'Total Base', example: '1200.00' })
   totalBase: string;
 
   @Column('numeric', {
@@ -85,6 +97,7 @@ export class Servicios {
     scale: 2,
     default: () => '0',
   })
+  @ApiProperty({ description: 'Total Extras', example: '1200.00' })
   totalExtras: string;
 
   @Column('numeric', {
@@ -93,27 +106,32 @@ export class Servicios {
     scale: 2,
     default: () => '0',
   })
+  @ApiProperty({ description: 'Total Final', example: '1200.00' })
   totalFinal: string;
 
   @Column('timestamp with time zone', {
     name: 'hora_inicio_servicio',
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Hora Inicio Servicio', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   horaInicioServicio: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'hora_fin_servicio',
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Hora Fin Servicio', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   horaFinServicio: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'hora_llegada_casa',
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Hora Llegada Casa', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   horaLlegadaCasa: Date | null;
 
   @Column('smallint', { name: 'prorrogas_usadas', default: () => '0' })
+  @ApiProperty({ description: 'Prorrogas Usadas', example: 1 })
   prorrogasUsadas: number;
 
   @Column('enum', {
@@ -127,6 +145,11 @@ export class Servicios {
     ],
     default: 'pendiente',
   })
+  @ApiProperty({ description: 'Estado', enum: ['pendiente',
+      'en_curso',
+      'finalizado',
+      'cancelado',
+      'pendiente_encadenado',], example: 'pendiente' })
   estado:
     | 'pendiente'
     | 'en_curso'
@@ -135,37 +158,47 @@ export class Servicios {
     | 'pendiente_encadenado';
 
   @Column('text', { name: 'notas', nullable: true })
+  @ApiPropertyOptional({ description: 'Notas', example: 'Ejemplo' })
   notas: string | null;
 
   @Column('varchar', { name: 'telegram_cliente_mensaje_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Telegram Cliente Mensaje Id', example: '00000000-0000-4000-8000-000000000000' })
   telegramClienteMensajeId: string | null;
 
   @Column('varchar', { name: 'telegram_empleada_mensaje_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Telegram Empleada Mensaje Id', example: '00000000-0000-4000-8000-000000000000' })
   telegramEmpleadaMensajeId: string | null;
 
   @Column('bigint', { name: 'cliente_telegram_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Cliente Telegram Id', example: '00000000-0000-4000-8000-000000000000' })
   clienteTelegramId: string | null;
 
   @Column('boolean', { name: 'ia_activa', default: true })
+  @ApiProperty({ description: 'Ia Activa', example: true })
   iaActiva: boolean;
 
   @Column('bigint', { name: 'telegram_thread_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Telegram Thread Id', example: '00000000-0000-4000-8000-000000000000' })
   telegramThreadId: string | null;
 
   @Column('integer', { name: 'calificacion', nullable: true })
+  @ApiPropertyOptional({ description: 'Calificacion', example: 1 })
   calificacion: number | null;
 
   @Column('text', { name: 'comentarios_calificacion', nullable: true })
+  @ApiPropertyOptional({ description: 'Comentarios Calificacion', example: 'Ejemplo' })
   comentariosCalificacion: string | null;
 
   @Column('boolean', {
     name: 'notificacion_extension_enviada',
     default: false,
   })
+  @ApiProperty({ description: 'Notificacion Extension Enviada', example: true })
   notificacionExtensionEnviada: boolean;
 
   /** ID del servicio que debe terminar antes de que este pueda iniciar (cita encadenada) */
   @Column('uuid', { name: 'servicio_previo_id', nullable: true })
+  @ApiPropertyOptional({ description: 'Servicio Previo Id', example: '00000000-0000-4000-8000-000000000000' })
   servicioPrevioId: string | null;
 
   /** Estimación dinámica de cuándo iniciará este servicio (actualizada por trigger al extenderse el previo) */
@@ -173,69 +206,82 @@ export class Servicios {
     name: 'hora_inicio_estimada',
     nullable: true,
   })
+  @ApiPropertyOptional({ description: 'Hora Inicio Estimada', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   horaInicioEstimada: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',
   })
+  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   createdAt: Date;
 
   @Column('timestamp with time zone', {
     name: 'updated_at',
     default: () => 'now()',
   })
+  @ApiProperty({ description: 'Updated At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
   updatedAt: Date;
 
   @OneToMany(
     () => AlertasClientes,
     (alertasClientes) => alertasClientes.servicio,
   )
+  @ApiProperty({ description: 'Alertas Clientes', type: () => [AlertasClientes], example: [] })
   alertasClientes: AlertasClientes[];
 
   @OneToMany(
     () => ConversacionesTelegram,
     (conversacionesTelegram) => conversacionesTelegram.servicio,
   )
+  @ApiProperty({ description: 'Conversaciones Telegrams', type: () => [ConversacionesTelegram], example: [] })
   conversacionesTelegrams: ConversacionesTelegram[];
 
   @OneToMany(
     () => ExtensionesServicio,
     (extensionesServicio) => extensionesServicio.servicio,
   )
+  @ApiProperty({ description: 'Extensiones Servicios', type: () => [ExtensionesServicio], example: [] })
   extensionesServicios: ExtensionesServicio[];
 
   @OneToMany(() => ExtrasServicio, (extrasServicio) => extrasServicio.servicio)
+  @ApiProperty({ description: 'Extras Servicios', type: () => [ExtrasServicio], example: [] })
   extrasServicios: ExtrasServicio[];
 
   @OneToMany(() => Prorrogas, (prorrogas) => prorrogas.servicio)
+  @ApiProperty({ description: 'Prorrogases', type: () => [Prorrogas], example: [] })
   prorrogases: Prorrogas[];
 
   @ManyToOne(() => Clientes, (clientes) => clientes.servicios, {
     onDelete: 'RESTRICT',
   })
   @JoinColumn([{ name: 'cliente_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Cliente', type: () => Clientes })
   cliente: Clientes;
 
   @ManyToOne(() => Empleadas, (empleadas) => empleadas.servicios, {
     onDelete: 'RESTRICT',
   })
   @JoinColumn([{ name: 'empleada_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Empleada', type: () => Empleadas })
   empleada: Empleadas;
 
   @ManyToOne(() => Usuarios, (usuarios) => usuarios.servicios, {
     onDelete: 'RESTRICT',
   })
   @JoinColumn([{ name: 'jefe_id', referencedColumnName: 'id' }])
+  @ApiProperty({ description: 'Jefe', type: () => Usuarios })
   jefe: Usuarios;
 
   @OneToMany(() => Viajes, (viajes) => viajes.servicio)
+  @ApiProperty({ description: 'Viajes', type: () => [Viajes], example: [] })
   viajes: Viajes[];
 
   @OneToMany(
     () => LoyaltyTransaction,
     (loyaltyTransaction) => loyaltyTransaction.servicio,
   )
+  @ApiProperty({ description: 'Loyalty Transactions', type: () => [LoyaltyTransaction], example: [] })
   loyaltyTransactions: LoyaltyTransaction[];
 
   /** Servicio previo al que está encadenado este (si aplica) */
@@ -244,9 +290,11 @@ export class Servicios {
     onDelete: 'SET NULL',
   })
   @JoinColumn([{ name: 'servicio_previo_id', referencedColumnName: 'id' }])
+  @ApiPropertyOptional({ description: 'Servicio Previo', type: () => Servicios })
   servicioPrevio: Servicios | null;
 
   /** Servicios que están en cola esperando que este termine */
   @OneToMany(() => Servicios, (s) => s.servicioPrevio)
+  @ApiProperty({ description: 'Servicios Encadenados', type: () => [Servicios], example: [] })
   serviciosEncadenados: Servicios[];
 }
