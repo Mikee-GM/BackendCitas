@@ -16,7 +16,6 @@ import { TelegramAuthUpdate } from './telegram-auth.update';
 import { TelegramCatalogUpdate } from './telegram-catalog.update';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 
-
 interface SessionData {
   step?:
     | 'AWAITING_DURATION'
