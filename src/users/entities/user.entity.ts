@@ -35,6 +35,14 @@ export class Usuarios {
   @ApiProperty({ description: 'Rol', enum: ['jefe', 'empleada', 'chofer', 'admin'], example: 'jefe' })
   rol: 'jefe' | 'empleada' | 'chofer' | 'admin';
 
+  @Column('character varying', { name: 'nombre', nullable: true, length: 255 })
+  @ApiPropertyOptional({ description: 'Nombre', example: 'Juan' })
+  nombre: string | null;
+
+  @Column('character varying', { name: 'apellido', nullable: true, length: 255 })
+  @ApiPropertyOptional({ description: 'Apellido', example: 'Pérez' })
+  apellido: string | null;
+
   @Column('boolean', { name: 'activo', default: () => 'true' })
   @ApiProperty({ description: 'Activo', example: true })
   activo: boolean;

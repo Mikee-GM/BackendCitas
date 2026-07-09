@@ -7,6 +7,7 @@ import {
   Param,
   Delete,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -31,7 +32,12 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'users', entity: Usuarios, createDto: CreateUserDto, protected: false })
+  @ApiCreateDocs({
+    tag: 'users',
+    entity: Usuarios,
+    createDto: CreateUserDto,
+    protected: false,
+  })
   create(@Body() createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
   }
@@ -40,8 +46,8 @@ export class UsersController {
   @ApiFindAllDocs({ tag: 'users', entity: Usuarios, protected: true })
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'jefe')
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@Query('rol') rol?: Usuarios['rol']) {
+    return this.usersService.findAll(rol);
   }
 
   @Get(':id')
@@ -53,7 +59,12 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'users', entity: Usuarios, updateDto: UpdateUserDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'users',
+    entity: Usuarios,
+    updateDto: UpdateUserDto,
+    protected: true,
+  })
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'jefe')
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
@@ -69,7 +80,11 @@ export class UsersController {
   }
 
   @Post(':id/telegram-otp')
-  @ApiActionDocs('Generar codigo OTP para vincular Telegram', true, 'ID del usuario')
+  @ApiActionDocs(
+    'Generar codigo OTP para vincular Telegram',
+    true,
+    'ID del usuario',
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'jefe')
   generateTelegramOtp(@Param('id') id: string) {
@@ -77,7 +92,11 @@ export class UsersController {
   }
 
   @Post(':id/unlink-telegram')
-  @ApiActionDocs('Desvincular cuenta de Telegram del usuario', true, 'ID del usuario')
+  @ApiActionDocs(
+    'Desvincular cuenta de Telegram del usuario',
+    true,
+    'ID del usuario',
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'jefe')
   unlinkTelegram(@Param('id') id: string) {

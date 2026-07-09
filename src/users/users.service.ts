@@ -61,7 +61,10 @@ export class UsersService {
     return this.usuariosRepository.save(user);
   }
 
-  findAll() {
+  findAll(rol?: Usuarios['rol']) {
+    if (rol) {
+      return this.usuariosRepository.find({ where: { rol } });
+    }
     return this.usuariosRepository.find();
   }
 
