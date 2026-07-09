@@ -21,9 +21,11 @@ import { AuthModule } from './auth/auth.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ApartmentsModule } from './apartments/apartments.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
+    UploadModule,
     AuthModule,
     RealtimeModule,
     LoyaltyModule,

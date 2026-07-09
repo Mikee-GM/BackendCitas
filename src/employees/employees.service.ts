@@ -131,6 +131,13 @@ export class EmployeesService {
     });
   }
 
+  async findAllActive(): Promise<Empleadas[]> {
+    return await this.empleadasRepository.find({
+      where: { catalogoActivo: true },
+      relations: { usuario: true, empleadaFotos: true },
+    });
+  }
+
   async findOne(id: string): Promise<Empleadas> {
     const empleada = await this.empleadasRepository.findOne({
       where: { id },
