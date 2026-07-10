@@ -17,26 +17,42 @@ export class LoyaltyTransaction {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
-  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   id: string;
 
   @Column('uuid', { name: 'cliente_id' })
-  @ApiProperty({ description: 'Cliente Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Cliente Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   clienteId: string;
 
   @Column('uuid', { name: 'servicio_id', nullable: true })
-  @ApiPropertyOptional({ description: 'Servicio Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiPropertyOptional({
+    description: 'Servicio Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   servicioId: string | null;
 
   @Column('uuid', { name: 'created_by_user_id', nullable: true })
-  @ApiPropertyOptional({ description: 'Created By User Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiPropertyOptional({
+    description: 'Created By User Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   createdByUserId: string | null;
 
   @Column('enum', {
     name: 'type',
     enum: ['earned', 'manual_adjustment', 'tier_assignment', 'reversal'],
   })
-  @ApiProperty({ description: 'Type', enum: ['earned', 'manual_adjustment', 'tier_assignment', 'reversal'], example: 'earned' })
+  @ApiProperty({
+    description: 'Type',
+    enum: ['earned', 'manual_adjustment', 'tier_assignment', 'reversal'],
+    example: 'earned',
+  })
   type: 'earned' | 'manual_adjustment' | 'tier_assignment' | 'reversal';
 
   @Column('integer', { name: 'points' })
@@ -60,7 +76,12 @@ export class LoyaltyTransaction {
     name: 'created_at',
     default: () => 'now()',
   })
-  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiProperty({
+    description: 'Created At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   createdAt: Date;
 
   @ManyToOne(() => Clientes, (cliente) => cliente.loyaltyTransactions, {

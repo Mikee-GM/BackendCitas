@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -17,7 +18,7 @@ import { LoyaltyTier } from './entities/loyalty-tier.entity';
 import { LoyaltyTransaction } from './entities/loyalty-transaction.entity';
 
 @Injectable()
-export class LoyaltyService {
+export class LoyaltyService implements OnModuleInit {
   constructor(
     @InjectRepository(LoyaltyTier)
     private readonly tiersRepository: Repository<LoyaltyTier>,
@@ -31,6 +32,55 @@ export class LoyaltyService {
     private readonly servicesRepository: Repository<Servicios>,
     private readonly dataSource: DataSource,
   ) {}
+
+  async onModuleInit() {
+    await this.seedTiersIfEmpty();
+  }
+
+  async seedTiersIfEmpty() {
+    try {
+      const count = await this.tiersRepository.count();
+      if (count === 0) {
+        const defaultTiers = [
+          this.tiersRepository.create({
+            code: 'bronce',
+            name: 'Bronce',
+            minSpend: '0.00',
+            earnRate: '0.1000',
+            sortOrder: 1,
+            active: true,
+          }),
+          this.tiersRepository.create({
+            code: 'plata',
+            name: 'Plata',
+            minSpend: '10000.00',
+            earnRate: '0.1000',
+            sortOrder: 2,
+            active: true,
+          }),
+          this.tiersRepository.create({
+            code: 'oro',
+            name: 'Oro',
+            minSpend: '30000.00',
+            earnRate: '0.1000',
+            sortOrder: 3,
+            active: true,
+          }),
+          this.tiersRepository.create({
+            code: 'vip',
+            name: 'VIP',
+            minSpend: '70000.00',
+            earnRate: '0.1000',
+            sortOrder: 4,
+            active: true,
+          }),
+        ];
+        await this.tiersRepository.save(defaultTiers);
+      }
+    } catch (error) {
+      console.error('Error seeding default loyalty tiers:', error);
+    }
+  }
 
   async listTiers(): Promise<LoyaltyTier[]> {
     return this.tiersRepository.find({

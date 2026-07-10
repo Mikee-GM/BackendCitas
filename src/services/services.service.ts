@@ -231,6 +231,27 @@ export class ServicesService implements OnModuleInit {
             : undefined;
 
         if (targetChatId) {
+          const inlineButtons: any[] = [
+            [
+              Markup.button.callback(
+                '🏁 Finalizar Servicio',
+                `finalizar_servicio:${servicio.id}`,
+              ),
+            ],
+          ];
+
+          if (
+            servicio.metodoPago === 'tarjeta' ||
+            servicio.metodoPago === 'transferencia'
+          ) {
+            inlineButtons.push([
+              Markup.button.callback(
+                '➕ Agregar Extra',
+                `agregar_extra_list:${servicio.id}`,
+              ),
+            ]);
+          }
+
           const empMsg = await this.bot.telegram.sendMessage(
             targetChatId,
             `💼 *¡Servicio en Curso!* 🟢\n\n` +
@@ -241,14 +262,7 @@ export class ServicesService implements OnModuleInit {
             {
               message_thread_id: threadId,
               parse_mode: 'Markdown',
-              ...Markup.inlineKeyboard([
-                [
-                  Markup.button.callback(
-                    '🏁 Finalizar Servicio',
-                    `finalizar_servicio:${servicio.id}`,
-                  ),
-                ],
-              ]),
+              ...Markup.inlineKeyboard(inlineButtons),
             },
           );
           servicio.telegramEmpleadaMensajeId = empMsg.message_id.toString();

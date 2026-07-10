@@ -11,7 +11,10 @@ export class LoyaltyTier {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
-  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   id: string;
 
   @Column('character varying', { name: 'code', unique: true, length: 50 })
@@ -52,17 +55,31 @@ export class LoyaltyTier {
     name: 'created_at',
     default: () => 'now()',
   })
-  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiProperty({
+    description: 'Created At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   createdAt: Date;
 
   @Column('timestamp with time zone', {
     name: 'updated_at',
     default: () => 'now()',
   })
-  @ApiProperty({ description: 'Updated At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiProperty({
+    description: 'Updated At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   updatedAt: Date;
 
   @OneToMany(() => ClientMembership, (membership) => membership.tier)
-  @ApiProperty({ description: 'Memberships', type: () => [ClientMembership], example: [] })
+  @ApiProperty({
+    description: 'Memberships',
+    type: () => [ClientMembership],
+    example: [],
+  })
   memberships: ClientMembership[];
 }

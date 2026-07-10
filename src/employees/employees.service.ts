@@ -11,6 +11,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { Empleadas } from './entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity';
+import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 
 @Injectable()
 export class EmployeesService {
@@ -44,6 +45,7 @@ export class EmployeesService {
       jefeId,
       linkX,
       contactLabel,
+      extras,
     } = createEmployeeDto;
 
     // 1. Validar que el email no esté registrado
@@ -115,8 +117,24 @@ export class EmployeesService {
         }
       }
 
+      // E. Crear extras del catálogo de ser necesario
+      const extrasGuardados: ExtrasCatalogo[] = [];
+      if (extras && extras.length > 0) {
+        for (const ext of extras) {
+          const nuevoExtra = manager.create(ExtrasCatalogo, {
+            empleadaId: empleadaGuardada.id,
+            nombre: ext.nombre,
+            precio: ext.precio.toString(),
+            activo: true,
+          });
+          const extraGuardado = await manager.save(ExtrasCatalogo, nuevoExtra);
+          extrasGuardados.push(extraGuardado);
+        }
+      }
+
       empleadaGuardada.usuario = usuarioGuardado;
       empleadaGuardada.empleadaFotos = fotosGuardadas;
+      empleadaGuardada.extrasCatalogos = extrasGuardados;
       return empleadaGuardada;
     });
 
@@ -131,21 +149,21 @@ export class EmployeesService {
 
   async findAll(): Promise<Empleadas[]> {
     return await this.empleadasRepository.find({
-      relations: { usuario: true, empleadaFotos: true },
+      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
   }
 
   async findAllActive(): Promise<Empleadas[]> {
     return await this.empleadasRepository.find({
       where: { catalogoActivo: true },
-      relations: { usuario: true, empleadaFotos: true },
+      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
   }
 
   async findOne(id: string): Promise<Empleadas> {
     const empleada = await this.empleadasRepository.findOne({
       where: { id },
-      relations: { usuario: true, empleadaFotos: true },
+      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
 
     if (!empleada) {
@@ -176,8 +194,8 @@ export class EmployeesService {
       }
     }
 
-    // Ejecutar transacción si hay fotos extras a actualizar
-    const { fotosExtra, ...camposAActualizar } = updateEmployeeDto;
+    // Ejecutar transacción si hay fotos extras o servicios extras a actualizar
+    const { fotosExtra, extras, ...camposAActualizar } = updateEmployeeDto;
 
     await this.dataSource.transaction(async (manager) => {
       // 1. Actualizar campos del perfil principal
@@ -203,6 +221,59 @@ export class EmployeesService {
             orden: i,
           });
           await manager.save(EmpleadaFotos, nuevaFoto);
+        }
+      }
+
+      // 3. Actualizar extras si se especifican
+      if (extras !== undefined) {
+        // Obtener los extras actuales
+        const currentExtras = await manager.find(ExtrasCatalogo, {
+          where: { empleadaId: id },
+        });
+
+        // Identificar los extras recibidos por nombre para actualizar o crear
+        const extrasNombresRecibidos = extras.map((e) =>
+          e.nombre.toLowerCase().trim(),
+        );
+
+        // A. Desactivar/Eliminar los que no se enviaron
+        for (const current of currentExtras) {
+          if (
+            !extrasNombresRecibidos.includes(
+              current.nombre.toLowerCase().trim(),
+            )
+          ) {
+            try {
+              await manager.delete(ExtrasCatalogo, { id: current.id });
+            } catch (e) {
+              await manager.update(ExtrasCatalogo, current.id, {
+                activo: false,
+              });
+            }
+          }
+        }
+
+        // B. Crear o actualizar los que sí se enviaron
+        for (const ext of extras) {
+          const matched = currentExtras.find(
+            (c) =>
+              c.nombre.toLowerCase().trim() === ext.nombre.toLowerCase().trim(),
+          );
+
+          if (matched) {
+            await manager.update(ExtrasCatalogo, matched.id, {
+              precio: ext.precio.toString(),
+              activo: true,
+            });
+          } else {
+            const nuevoExtra = manager.create(ExtrasCatalogo, {
+              empleadaId: id,
+              nombre: ext.nombre,
+              precio: ext.precio.toString(),
+              activo: true,
+            });
+            await manager.save(ExtrasCatalogo, nuevoExtra);
+          }
         }
       }
     });

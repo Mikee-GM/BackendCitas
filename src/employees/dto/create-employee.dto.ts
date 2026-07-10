@@ -10,7 +10,34 @@ import {
   IsNumber,
   IsArray,
   IsEnum,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class CreateExtraDto {
+  @ApiProperty({
+    description: 'Nombre del servicio extra',
+    example: 'Masaje',
+    maxLength: 150,
+  })
+  @IsString({ message: 'El nombre del servicio extra debe ser texto' })
+  @IsNotEmpty({ message: 'El nombre del servicio extra es obligatorio' })
+  @MaxLength(150, {
+    message: 'El nombre del servicio extra no puede superar los 150 caracteres',
+  })
+  readonly nombre: string;
+
+  @ApiProperty({
+    description: 'Precio del servicio extra',
+    example: 50,
+  })
+  @IsNumber(
+    {},
+    { message: 'El precio del servicio extra debe ser un número válido' },
+  )
+  @IsNotEmpty({ message: 'El precio del servicio extra es obligatorio' })
+  readonly precio: number;
+}
 
 export class CreateEmployeeDto {
   @ApiProperty({
@@ -191,4 +218,14 @@ export class CreateEmployeeDto {
   })
   @IsNotEmpty({ message: 'El tipo de empleada es obligatorio' })
   readonly tipo: 'independiente' | 'agencia';
+
+  @ApiPropertyOptional({
+    description: 'Servicios extra con sus precios',
+    type: [CreateExtraDto],
+  })
+  @IsArray({ message: 'Los extras deben ser un arreglo' })
+  @ValidateNested({ each: true })
+  @Type(() => CreateExtraDto)
+  @IsOptional()
+  readonly extras?: CreateExtraDto[];
 }

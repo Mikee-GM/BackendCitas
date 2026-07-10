@@ -7,6 +7,7 @@ import {
   Param,
   Delete,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { CatalogExtrasService } from './catalog-extras.service';
 import { CreateCatalogExtraDto } from './dto/create-catalog-extra.dto';
@@ -31,40 +32,61 @@ export class CatalogExtrasController {
   constructor(private readonly catalogExtrasService: CatalogExtrasService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'catalog-extras', entity: ExtrasCatalogo, createDto: CreateCatalogExtraDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'catalog-extras',
+    entity: ExtrasCatalogo,
+    createDto: CreateCatalogExtraDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   create(@Body() createCatalogExtraDto: CreateCatalogExtraDto) {
     return this.catalogExtrasService.create(createCatalogExtraDto);
   }
 
   @Get()
-  @ApiFindAllDocs({ tag: 'catalog-extras', entity: ExtrasCatalogo, protected: true })
+  @ApiFindAllDocs({
+    tag: 'catalog-extras',
+    entity: ExtrasCatalogo,
+    protected: true,
+  })
   @Roles('admin', 'jefe', 'empleada')
-  findAll() {
+  findAll(@Query('empleadaId') empleadaId?: string) {
+    if (empleadaId) {
+      return this.catalogExtrasService.findByEmpleada(empleadaId);
+    }
     return this.catalogExtrasService.findAll();
   }
 
   @Get(':id')
-  @ApiFindOneDocs({ tag: 'catalog-extras', entity: ExtrasCatalogo, protected: true })
+  @ApiFindOneDocs({
+    tag: 'catalog-extras',
+    entity: ExtrasCatalogo,
+    protected: true,
+  })
   @Roles('admin', 'jefe', 'empleada')
   findOne(@Param('id') id: string) {
-    return this.catalogExtrasService.findOne(+id);
+    return this.catalogExtrasService.findOne(id);
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'catalog-extras', entity: ExtrasCatalogo, updateDto: UpdateCatalogExtraDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'catalog-extras',
+    entity: ExtrasCatalogo,
+    updateDto: UpdateCatalogExtraDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   update(
     @Param('id') id: string,
     @Body() updateCatalogExtraDto: UpdateCatalogExtraDto,
   ) {
-    return this.catalogExtrasService.update(+id, updateCatalogExtraDto);
+    return this.catalogExtrasService.update(id, updateCatalogExtraDto);
   }
 
   @Delete(':id')
   @ApiRemoveDocs({ tag: 'catalog-extras', protected: true })
   @Roles('admin', 'jefe')
   remove(@Param('id') id: string) {
-    return this.catalogExtrasService.remove(+id);
+    return this.catalogExtrasService.remove(id);
   }
 }

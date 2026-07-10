@@ -166,6 +166,17 @@ export class TelegramAuthUpdate {
         `Tu cuenta con correo ${user.email} (Rol: ${user.rol.toUpperCase()}) ahora está vinculada a este Telegram.`,
     );
 
+    if (user.rol === 'chofer' || user.rol === 'empleada') {
+      await ctx.reply(
+        `📍 Por favor, comparte tu ubicación en tiempo real utilizando el botón de abajo para poder recibir y gestionar servicios.`,
+        Markup.keyboard([
+          [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+        ])
+          .resize()
+          .oneTime(),
+      );
+    }
+
     if (user.rol === 'chofer') {
       const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
       if (driversGroupId) {

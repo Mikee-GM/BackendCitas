@@ -16,9 +16,19 @@ import { AuthModule } from '../auth/auth.module';
 import { ServicesModule } from '../services/services.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 
+import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
+import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Usuarios, Clientes, Empleadas, Servicios]),
+    TypeOrmModule.forFeature([
+      Usuarios,
+      Clientes,
+      Empleadas,
+      Servicios,
+      ExtrasCatalogo,
+      ExtrasServicio,
+    ]),
     AuthModule,
     LoyaltyModule,
     forwardRef(() => ServicesModule),

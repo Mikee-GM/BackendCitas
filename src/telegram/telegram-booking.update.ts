@@ -14,6 +14,8 @@ import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { TelegramAuthUpdate } from './telegram-auth.update';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
+import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
 
 interface SessionData {
   step?:
@@ -52,6 +54,10 @@ export class TelegramBookingUpdate {
     private readonly empleadasRepository: Repository<Empleadas>,
     @InjectRepository(Servicios)
     private readonly serviciosRepository: Repository<Servicios>,
+    @InjectRepository(ExtrasCatalogo)
+    private readonly extrasCatalogoRepository: Repository<ExtrasCatalogo>,
+    @InjectRepository(ExtrasServicio)
+    private readonly extrasServicioRepository: Repository<ExtrasServicio>,
     private readonly realtimeEventsService: RealtimeEventsService,
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => ServicesService))
@@ -475,6 +481,155 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     );
   }
 
+  @Action(/^agregar_extra_list:(.+)$/)
+  async onAgregarExtraList(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { empleada: true },
+    });
+
+    if (!servicio) {
+      await ctx.reply('❌ Servicio no encontrado.');
+      return;
+    }
+
+    // Buscar extras activos de la empleada
+    const extras = await this.extrasCatalogoRepository.find({
+      where: { empleadaId: servicio.empleadaId, activo: true },
+      order: { nombre: 'ASC' },
+    });
+
+    if (extras.length === 0) {
+      await ctx.reply(
+        '⚠️ No tienes registrados servicios extras en tu catálogo.\n' +
+          'Solicita a administración que los configure en el panel.',
+      );
+      return;
+    }
+
+    const inlineButtons = extras.map((extra) => [
+      Markup.button.callback(
+        `➕ ${extra.nombre} ($${extra.precio})`,
+        `agregar_extra_sel:${servicioId}:${extra.id}`,
+      ),
+    ]);
+
+    // Botón para regresar al menú de servicio
+    inlineButtons.push([
+      Markup.button.callback('🔙 Volver', `canc_fin_serv:${servicioId}`),
+    ]);
+
+    await ctx.editMessageText(
+      `➕ *Selecciona el servicio extra a agregar:*\n\n` +
+        `El método de pago se heredará automáticamente como *${servicio.metodoPago.toUpperCase()}*.`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard(inlineButtons),
+      },
+    );
+  }
+
+  @Action(/^agregar_extra_sel:(.+):(.+)$/)
+  async onAgregarExtraSel(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const servicioId = match[1];
+    const extraId = match[2];
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { empleada: { usuario: true } },
+    });
+
+    const extra = await this.extrasCatalogoRepository.findOne({
+      where: { id: extraId },
+    });
+
+    if (!servicio || !extra) {
+      await ctx.reply('❌ Servicio o extra no encontrado.');
+      return;
+    }
+
+    // Buscar el usuario del bot para registrar quién lo hizo
+    const telegramId = ctx.from?.id.toString();
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    if (!user) {
+      await ctx.reply('❌ Usuario del sistema no autenticado.');
+      return;
+    }
+
+    // Registrar el extra en el servicio
+    const extraServicio = this.extrasServicioRepository.create({
+      servicioId: servicio.id,
+      extraCatalogoId: extra.id,
+      precioCobrado: extra.precio,
+      metodoPago: servicio.metodoPago as any, // 'tarjeta' | 'transferencia'
+      registradoPor: user,
+    });
+
+    await this.extrasServicioRepository.save(extraServicio);
+
+    // Volver a cargar el servicio actualizado por el trigger de base de datos
+    const servicioActualizado = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+      relations: { cliente: true, empleada: true },
+    });
+
+    const total = servicioActualizado?.totalFinal || servicio.totalFinal;
+    const totalExtras = servicioActualizado?.totalExtras || '0.00';
+
+    await ctx.reply(
+      `✅ Servicio extra *${extra.nombre}* ($${extra.precio}) agregado al servicio con éxito.`,
+      { parse_mode: 'Markdown' },
+    );
+
+    // Actualizar el mensaje principal de control en curso enviándole el nuevo menú
+    const inlineButtons: any[] = [
+      [
+        Markup.button.callback(
+          '🏁 Finalizar Servicio',
+          `finalizar_servicio:${servicio.id}`,
+        ),
+      ],
+    ];
+
+    if (
+      servicio.metodoPago === 'tarjeta' ||
+      servicio.metodoPago === 'transferencia'
+    ) {
+      inlineButtons.push([
+        Markup.button.callback(
+          '➕ Agregar Extra',
+          `agregar_extra_list:${servicio.id}`,
+        ),
+      ]);
+    }
+
+    // Editar el mensaje original para volver a mostrar el estado en curso
+    const updatedMsg =
+      `💼 *¡Servicio en Curso!* 🟢\n\n` +
+      `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+      `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
+      `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
+      `• *Extras Acumulados:* $${totalExtras}\n` +
+      `• *Total Acumulado:* $${total}\n\n` +
+      `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`;
+
+    await ctx.editMessageText(updatedMsg, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard(inlineButtons),
+    });
+  }
+
   @Action(/^finalizar_servicio:(.+)$/)
   async onFinalizarServicio(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -794,6 +949,10 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     if (!match) return;
     const servicioId = match[1];
 
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
     let originalText = (ctx.callbackQuery?.message as any)?.text || '';
     // Limpiar el encabezado de advertencia si existe
     originalText = originalText.replace(
@@ -801,16 +960,31 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       '',
     );
 
+    const inlineButtons: any[] = [
+      [
+        Markup.button.callback(
+          '🏁 Finalizar Servicio',
+          `finalizar_servicio:${servicioId}`,
+        ),
+      ],
+    ];
+
+    if (
+      servicio &&
+      (servicio.metodoPago === 'tarjeta' ||
+        servicio.metodoPago === 'transferencia')
+    ) {
+      inlineButtons.push([
+        Markup.button.callback(
+          '➕ Agregar Extra',
+          `agregar_extra_list:${servicioId}`,
+        ),
+      ]);
+    }
+
     await ctx.editMessageText(originalText, {
       parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback(
-            '🏁 Finalizar Servicio',
-            `finalizar_servicio:${servicioId}`,
-          ),
-        ],
-      ]),
+      ...Markup.inlineKeyboard(inlineButtons),
     });
   }
 
@@ -840,13 +1014,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       await ctx.editMessageText(
         `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!`,
       );
-      await ctx.reply(
-        'Selecciona una opción:',
-        Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
-      );
+      await ctx.reply('¡Agradecemos tu preferencia!', Markup.removeKeyboard());
     } else {
       if (!ctx.session) {
         ctx.session = {};
@@ -863,31 +1031,37 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     }
   }
 
-  @On(['location', 'venue'])
+  @On(['location', 'venue', 'edited_message'])
   async onLocation(@Ctx() ctx: BotContext) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const message = ctx.message as any;
+    const message = (ctx.message ||
+      ctx.editedMessage ||
+      (ctx.update as any).edited_message) as any;
+    if (!message) return;
+
     let lat: string;
     let lng: string;
     let notasUbicacion: string | null = null;
 
-    if (message?.venue) {
+    if (message.venue) {
       const venue = message.venue;
       lat = venue.location.latitude.toString();
       lng = venue.location.longitude.toString();
       notasUbicacion = `Lugar seleccionado: ${venue.title}\nDirección: ${venue.address}`;
-    } else if (message?.location) {
+    } else if (message.location) {
       const location = message.location;
       lat = location.latitude.toString();
       lng = location.longitude.toString();
     } else {
-      await ctx.reply(
-        '❌ No se pudo obtener la ubicación. Por favor intenta de nuevo.',
-      );
+      // Ignore edited messages that don't contain a location
       return;
     }
+
+    const isEdited = !!(
+      ctx.editedMessage || (ctx.update as any).edited_message
+    );
 
     // Verificar si es personal del sistema (chofer o empleada)
     const user = await this.usuariosRepository.findOne({
@@ -901,9 +1075,11 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         user.choferes.ubicacionLng = lng;
         user.choferes.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.choferes);
-        await ctx.reply(
-          `📍 Ubicación actualizada correctamente para el chofer: ${user.choferes.nombre}`,
-        );
+        if (!isEdited) {
+          await ctx.reply(
+            `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}`,
+          );
+        }
         return;
       }
 
@@ -912,9 +1088,11 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         user.empleadas.ubicacionLng = lng;
         user.empleadas.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.empleadas);
-        await ctx.reply(
-          `📍 Ubicación actualizada correctamente para la empleada: ${user.empleadas.nombreArtistico}`,
-        );
+        if (!isEdited) {
+          await ctx.reply(
+            `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}`,
+          );
+        }
         return;
       }
     }
@@ -1954,10 +2132,7 @@ Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo
 
       await ctx.reply(
         `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.`,
-        Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
+        Markup.removeKeyboard(),
       );
       return;
     }
