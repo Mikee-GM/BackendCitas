@@ -34,6 +34,35 @@ export class TelegramAuthUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
+    // Check if the user is a registered system user (employee, admin, etc.)
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+
+    // Otherwise, check/register client
+    let client: Clientes | null = null;
+    if (!user) {
+      client = await this.clientesRepository.findOne({
+        where: { telegramChatId: telegramId },
+      });
+
+      if (!client) {
+        const firstName = ctx.from?.first_name || '';
+        const username = ctx.from?.username || '';
+        const fullName =
+          [firstName, ctx.from?.last_name].filter(Boolean).join(' ') ||
+          username ||
+          'Cliente';
+
+        // Auto-register client
+        client = this.clientesRepository.create({
+          telegramChatId: telegramId,
+          nombreTelegram: fullName,
+        });
+        await this.clientesRepository.save(client);
+      }
+    }
+
     // Interceptar deep link start para contratar (ej. /start contratar_ID o contratar_empleada_ID)
     const text = (ctx.message as any)?.text || '';
     const parts = text.split(' ');
@@ -49,11 +78,6 @@ export class TelegramAuthUpdate {
       }
     }
 
-    // Check if the user is a registered system user (employee, admin, etc.)
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
     if (user) {
       await ctx.reply(
         `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
@@ -62,27 +86,7 @@ export class TelegramAuthUpdate {
       return;
     }
 
-    // Otherwise, check/register client
-    let client = await this.clientesRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
-
-    const firstName = ctx.from?.first_name || '';
-    const username = ctx.from?.username || '';
-    const fullName =
-      [firstName, ctx.from?.last_name].filter(Boolean).join(' ') ||
-      username ||
-      'Cliente';
-
-    if (!client) {
-      // Auto-register client
-      client = this.clientesRepository.create({
-        telegramChatId: telegramId,
-        nombreTelegram: fullName,
-      });
-      await this.clientesRepository.save(client);
-    }
-
+    const fullName = client?.nombreTelegram || 'Cliente';
     const webUrl = process.env.WEB_URL || 'https://tu-sitio-pasteleria.com';
     await ctx.reply(
       `¡Hola ${fullName}! Bienvenido.\n` +

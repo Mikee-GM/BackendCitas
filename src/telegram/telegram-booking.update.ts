@@ -106,7 +106,7 @@ export class TelegramBookingUpdate {
 
   async sendDelayedReply(ctx: BotContext, text: string) {
     try {
-      const delayMs = 30000; // 30 segundos (medio minuto)
+      const delayMs = 20000; // 30 segundos (medio minuto)
 
       // Enviar la acción de "escribiendo" de inmediato
       await ctx.sendChatAction('typing').catch(() => {});
@@ -164,6 +164,11 @@ export class TelegramBookingUpdate {
 
     ctx.session.step = 'CHAT_CON_EMPLEADA';
     ctx.session.empleadaId = empleadaId;
+
+    await ctx.reply(
+      `Espere por favor, estamos poniéndonos en contacto con *${empleada.nombreArtistico}*...`,
+      { parse_mode: 'Markdown' },
+    );
 
     const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
@@ -269,6 +274,11 @@ Por favor, preséntate, saluda de forma muy cariñosa y pregúntale cuántas hor
     ctx.session.step = 'CHAT_CON_EMPLEADA_ENCADENADO';
     ctx.session.empleadaId = empleadaId;
     ctx.session.servicioPrevioId = servicioActivo.id;
+
+    await ctx.reply(
+      `Espere por favor, estamos poniéndonos en contacto con *${empleada.nombreArtistico}*...`,
+      { parse_mode: 'Markdown' },
+    );
 
     const horaEstimada = servicioActivo.horaInicioServicio
       ? new Date(
