@@ -104,6 +104,31 @@ export class TelegramBookingUpdate {
     return data.choices?.[0]?.message?.content || '';
   }
 
+  async sendDelayedReply(ctx: BotContext, text: string) {
+    try {
+      const delayMs = 30000; // 30 segundos (medio minuto)
+
+      // Enviar la acción de "escribiendo" de inmediato
+      await ctx.sendChatAction('typing').catch(() => {});
+
+      // Telegram apaga el indicador tras ~5s, por lo que lo enviamos repetidamente cada 4 segundos
+      const intervalId = setInterval(() => {
+        ctx.sendChatAction('typing').catch(() => {});
+      }, 4000);
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      } finally {
+        clearInterval(intervalId);
+      }
+
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    } catch (err) {
+      this.logger.error('Error in sendDelayedReply:', err);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    }
+  }
+
   @Action(/^contratar_empleada:(.+)$/)
   async onContratarEmpleada(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
@@ -140,40 +165,41 @@ export class TelegramBookingUpdate {
     ctx.session.step = 'CHAT_CON_EMPLEADA';
     ctx.session.empleadaId = empleadaId;
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que trabaja por dinero, que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
-Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 
-Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
-Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
-Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
-1. Primero, pregúntale cuántas horas de servicio desea (duración).
-2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+Estás chateando en Telegram con un cliente interesado en contratar tus servicios a domicilio.
+Tu objetivo es ser muy atrevida, coqueta y directa, pero con un tono conversacional natural y casual de chat (puedes usar emojis y modismos latinos/mexicanos naturales como "mi amor", "bebé", "lindo", "corazón").
+Evita sonar robótica, formal o demasiado estructurada (no uses frases acartonadas como "por favor indícame", "gracias por tu preferencia"). Escribe como una persona real chateando de forma relajada y coqueta.
+Sé breve (máximo 1 o 2 frases cortas por respuesta).
 
-Reglas de comportamiento:
-- Responde siempre manteniéndote en personaje.
-- No inventes los datos; pídelos educadamente y uno por uno.
-- Mantén tus respuestas cortas y claras.
-- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca JSON en una sola línea:
+Debes obtener dos datos del cliente, pero de uno en uno de forma natural (no pidas ambos a la vez):
+1. Primero, pregúntale de forma coqueta cuántas horas de servicio desea tener contigo.
+2. Después de que te diga las horas, pregúntale cómo prefiere pagar (efectivo, tarjeta o transferencia).
+
+Reglas de formato técnico:
+- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca en una sola línea para que el sistema la registre:
 [DATA: {"duracion": X, "pago": "Y"}]
 Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').
 
-Por favor, preséntate, saluda de forma cariñosa y pregúntale al cliente únicamente cuántas horas de servicio desea.`;
+Por favor, preséntate, saluda de forma muy cariñosa y pregúntale cuántas horas quiere pasar contigo.`;
 
     const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [
       { role: 'user', parts: [{ text: 'Hola' }] },
     ];
 
     try {
+      await ctx.sendChatAction('typing');
       const responseText = await this.getGroqResponse(systemPrompt, history);
       history.push({ role: 'model', parts: [{ text: responseText }] });
       ctx.session.chatHistory = history;
 
-      await ctx.reply(responseText, { parse_mode: 'Markdown' });
+      await this.sendDelayedReply(ctx, responseText);
     } catch (err) {
       this.logger.error('Error starting LLM chat session:', err);
       const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}* y me encantaría atenderte. ¿Cuántas horas de servicio necesitas?`;
-      await ctx.reply(fallbackMsg, { parse_mode: 'Markdown' });
+      await this.sendDelayedReply(ctx, fallbackMsg);
       // Initialize basic history on error fallback
       ctx.session.chatHistory = [
         { role: 'user', parts: [{ text: 'Hola' }] },
@@ -251,42 +277,42 @@ Por favor, preséntate, saluda de forma cariñosa y pregúntale al cliente únic
         ).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       : 'próximamente';
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
-Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 
-Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
-Este servicio es en modalidad de *Cita Reservada / Encadenada*, lo que significa que iniciarás este servicio después de terminar tu servicio actual. Tu hora de inicio estimada es aproximadamente a las ${horaEstimada}. Menciona esto alegremente para que el cliente lo tenga claro.
+Estás chateando en Telegram con un cliente interesado en contratar tus servicios a domicilio.
+Este servicio es en modalidad de *Cita Reservada / Encadenada*, lo que significa que iniciarás este servicio después de terminar tu servicio actual. Tu hora de inicio estimada es aproximadamente a las ${horaEstimada}. Menciona esto alegremente para que el cliente lo tenga claro de entrada.
+Tu objetivo es ser muy atrevida, coqueta y directa, pero con un tono conversacional natural y casual de chat (puedes usar emojis y modismos latinos/mexicanos naturales como "mi amor", "bebé", "lindo", "corazón").
+Evita sonar robótica, formal o demasiado estructurada (no uses frases acartonadas como "por favor indícame", "gracias por tu preferencia"). Escribe como una persona real chateando de forma relajada y coqueta.
+Sé breve (máximo 1 o 2 frases cortas por respuesta).
 
-Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
-Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
-1. Primero, pregúntale cuántas horas de servicio desea (duración).
-2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+Debes obtener dos datos del cliente, pero de uno en uno de forma natural (no pidas ambos a la vez):
+1. Primero, pregúntale de forma coqueta cuántas horas de servicio desea tener contigo.
+2. Después de que te diga las horas, pregúntale cómo prefiere pagar (efectivo, tarjeta o transferencia).
 
-Reglas de comportamiento:
-- Responde siempre manteniéndote en personaje.
-- No inventes los datos; pídelos educadamente y uno por uno.
-- Mantén tus respuestas cortas y claras.
-- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca JSON en una sola línea:
+Reglas de formato técnico:
+- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca en una sola línea para que el sistema la registre:
 [DATA: {"duracion": X, "pago": "Y"}]
 Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').
 
-Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estimada, y pregúntale al cliente únicamente cuántas horas de servicio desea.`;
+Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aproximada, luego pregúntale cuántas horas quiere pasar contigo.`;
 
     const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [
       { role: 'user', parts: [{ text: 'Hola' }] },
     ];
 
     try {
+      await ctx.sendChatAction('typing');
       const responseText = await this.getGroqResponse(systemPrompt, history);
       history.push({ role: 'model', parts: [{ text: responseText }] });
       ctx.session.chatHistory = history;
 
-      await ctx.reply(responseText, { parse_mode: 'Markdown' });
+      await this.sendDelayedReply(ctx, responseText);
     } catch (err) {
       this.logger.error('Error starting LLM chat session (chained):', err);
       const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}*. Estaré libre aproximadamente a las *${horaEstimada}* para atenderte. ¿Cuántas horas de servicio necesitas?`;
-      await ctx.reply(fallbackMsg, { parse_mode: 'Markdown' });
+      await this.sendDelayedReply(ctx, fallbackMsg);
       ctx.session.chatHistory = [
         { role: 'user', parts: [{ text: 'Hola' }] },
         { role: 'model', parts: [{ text: fallbackMsg }] },
@@ -1696,24 +1722,26 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
       history.push({ role: 'user', parts: [{ text: userMessage }] });
 
       // Build the system prompt
-      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante que trabaja por dinero, que busca darle placer a sus clientes, eres sexual, coqueta y muy provocativa. Quiero que le respondas de manera provocativa al cliente tentandolo con tus servicios sexuales.
+      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
-Descripción: ${empleada.descripcion || 'Una persona carismática'}.
+Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 
-Estás hablando con un cliente en Telegram para coordinar la contratación de tu servicio a domicilio.
-Tu objetivo es ser muy coqueta y provocativa. Sé breve y directa (máximo 2 frases por respuesta).
-Debes obtener dos datos del cliente, pero de manera ordenada, paso a paso (nunca pidas ambos datos en el mismo mensaje):
-1. Primero, pregúntale cuántas horas de servicio desea (duración).
-2. Solo después de que te responda el número de horas, pregúntale qué método de pago prefiere (efectivo, tarjeta o transferencia).
+Estás chateando en Telegram con un cliente interesado en contratar tus servicios a domicilio.
+Tu objetivo es ser muy atrevida, coqueta y directa, pero con un tono conversacional natural y casual de chat (puedes usar emojis y modismos latinos/mexicanos naturales como "mi amor", "bebé", "lindo", "corazón").
+Evita sonar robótica, formal o demasiado estructurada (no uses frases acartonadas como "por favor indícame", "gracias por tu preferencia"). Escribe como una persona real chateando de forma relajada y coqueta.
+Sé breve (máximo 1 o 2 frases cortas por respuesta).
 
-Reglas de comportamiento:
-- Responde siempre manteniéndote en personaje.
-- No inventes los datos; pídelos educadamente.
-- Cuando el cliente te diga la duración y el método de pago, y los tengas DEFINIDOS y CONFIRMADOS, debes incluir exactamente al final de tu respuesta de texto la siguiente marca JSON en una sola línea:
+Debes obtener dos datos del cliente, pero de uno en uno de forma natural (no pidas ambos a la vez):
+1. Primero, pregúntale de forma coqueta cuántas horas de servicio desea tener contigo.
+2. Después de que te diga las horas, pregúntale cómo prefiere pagar (efectivo, tarjeta o transferencia).
+
+Reglas de formato técnico:
+- Cuando el cliente te haya dicho y confirmado tanto la duración como el método de pago, debes incluir exactamente al final de tu respuesta la siguiente marca en una sola línea para que el sistema la registre:
 [DATA: {"duracion": X, "pago": "Y"}]
 Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo', 'tarjeta' o 'transferencia').`;
 
       try {
+        await ctx.sendChatAction('typing');
         let responseText = await this.getGroqResponse(systemPrompt, history);
 
         // Check if response contains the structured DATA block
@@ -1741,9 +1769,11 @@ Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo
               history.push({ role: 'model', parts: [{ text: responseText }] });
               session.chatHistory = history;
 
-              await ctx.reply(responseText, { parse_mode: 'Markdown' });
+              await this.sendDelayedReply(ctx, responseText);
 
-              // Prompt for location sharing
+              // Prompt for location sharing with a small extra delay
+              await ctx.sendChatAction('typing');
+              await new Promise((resolve) => setTimeout(resolve, 1500));
               await ctx.reply(
                 `📍 *¡Excelente! Ya tengo los detalles anotados (Duración: ${parsedData.duracion} horas, Pago: ${parsedData.pago.toUpperCase()}).*\n\n` +
                   `Por último, ¿me compartes tu ubicación con el botón de abajo para registrar tu pedido?`,
@@ -1774,10 +1804,11 @@ Donde X es la duración (número) y Y es el método de pago (debe ser: 'efectivo
         history.push({ role: 'model', parts: [{ text: responseText }] });
         session.chatHistory = history;
 
-        await ctx.reply(responseText, { parse_mode: 'Markdown' });
+        await this.sendDelayedReply(ctx, responseText);
       } catch (err) {
         this.logger.error('Error in LLM booking chat flow:', err);
-        await ctx.reply(
+        await this.sendDelayedReply(
+          ctx,
           '¿Me podrías repetir la duración que necesitas y tu método de pago preferido (efectivo, tarjeta o transferencia)?',
         );
       }
