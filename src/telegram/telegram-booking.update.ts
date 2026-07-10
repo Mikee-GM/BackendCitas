@@ -13,7 +13,6 @@ import { Viajes } from '../trips/entities/trip.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { TelegramAuthUpdate } from './telegram-auth.update';
-import { TelegramCatalogUpdate } from './telegram-catalog.update';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 
 interface SessionData {
@@ -61,8 +60,6 @@ export class TelegramBookingUpdate {
     private readonly telegramService: TelegramService,
     @Inject(forwardRef(() => TelegramAuthUpdate))
     private readonly telegramAuthUpdate: TelegramAuthUpdate,
-    @Inject(forwardRef(() => TelegramCatalogUpdate))
-    private readonly telegramCatalogUpdate: TelegramCatalogUpdate,
     private readonly loyaltyService: LoyaltyService,
   ) {}
 
@@ -1353,12 +1350,9 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
 
       try {
         await ctx.editMessageText(
-          `❌ *Reserva Cancelada*\n\nTu cita encadenada ha sido cancelada exitosamente. Puedes volver al catálogo para solicitar una nueva.`,
+          `❌ *Reserva Cancelada*\n\nTu cita encadenada ha sido cancelada exitosamente. Para iniciar una nueva, por favor utiliza un enlace de contratación desde nuestra web.`,
           {
             parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [Markup.button.callback('👩‍🍳 Ver Catálogo', 'ver_empleadas')],
-            ]),
           },
         );
       } catch (editErr) {
@@ -1655,20 +1649,16 @@ Por favor, preséntate, saluda de forma cariñosa comentando sobre la hora estim
 
     if (
       cleanText.includes('volver al menu') ||
-      cleanText.includes('volver al menú')
+      cleanText.includes('volver al menú') ||
+      cleanText.includes('ver empleadas') ||
+      cleanText.includes('ver ayuda') ||
+      cleanText.includes('ayuda')
     ) {
       ctx.session = {};
-      return this.telegramAuthUpdate.onStart(ctx);
-    }
-
-    if (cleanText.includes('ver empleadas')) {
-      ctx.session = {};
-      return this.telegramCatalogUpdate.listEmpleadas(ctx);
-    }
-
-    if (cleanText.includes('ver ayuda') || cleanText.includes('ayuda')) {
-      ctx.session = {};
-      return this.telegramAuthUpdate.onHelp(ctx);
+      await ctx.reply(
+        'Para contratar a una de nuestras empleadas, por favor utiliza el enlace de contratación directa en nuestra web.',
+      );
+      return;
     }
 
     const session = ctx.session;

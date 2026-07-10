@@ -5,7 +5,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { session } from 'telegraf';
 import { TelegramService } from './telegram.service';
 import { TelegramAuthUpdate } from './telegram-auth.update';
-import { TelegramCatalogUpdate } from './telegram-catalog.update';
 import { TelegramBookingUpdate } from './telegram-booking.update';
 import { TelegramDriverUpdate } from './telegram-driver.update';
 import { TelegramAdminUpdate } from './telegram-admin.update';
@@ -43,7 +42,6 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
   providers: [
     TelegramService,
     TelegramAuthUpdate,
-    TelegramCatalogUpdate,
     TelegramBookingUpdate,
     TelegramDriverUpdate,
     TelegramAdminUpdate,

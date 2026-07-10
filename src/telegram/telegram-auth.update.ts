@@ -29,6 +29,7 @@ export class TelegramAuthUpdate {
   ) {}
 
   @Start()
+  @Command('contactar')
   async onStart(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -57,10 +58,6 @@ export class TelegramAuthUpdate {
       await ctx.reply(
         `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
           `¿Qué deseas hacer hoy?`,
-        Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
       );
       return;
     }
@@ -86,16 +83,13 @@ export class TelegramAuthUpdate {
       await this.clientesRepository.save(client);
     }
 
+    const webUrl = process.env.WEB_URL || 'https://tu-sitio-pasteleria.com';
     await ctx.reply(
-      `¡Hola ${fullName}! Bienvenido al sistema de pastelería.\n` +
-        `¿Qué deseas hacer hoy?\n\n` +
-        `🌐 *Visita nuestra web:* https://tu-sitio-pasteleria.com`,
+      `¡Hola ${fullName}! Bienvenido.\n` +
+        `Para contratar a una de nuestras empleadas y comenzar tu servicio, por favor utiliza el enlace de contratación directa en nuestra web.\n\n` +
+        `🌐 *Visita nuestra web:* ${webUrl}`,
       {
         parse_mode: 'Markdown',
-        ...Markup.keyboard([
-          ['🏠 Volver al menú', '👩‍🍳 Ver empleadas'],
-          ['📖 Ver ayuda'],
-        ]).resize(),
       },
     );
   }
@@ -104,8 +98,7 @@ export class TelegramAuthUpdate {
   async onHelp(@Ctx() ctx: Context) {
     await ctx.reply(
       'Comandos disponibles:\n' +
-        '/start - Iniciar interacción con el bot\n' +
-        '/empleadas - Ver el catálogo de empleadas\n' +
+        '/contactar - Iniciar interacción con el bot\n' +
         '/vincular <código> - Vincular cuenta de empleado o chofer\n' +
         '/desvincular - Desvincular tu cuenta de empleado o chofer\n' +
         '/vincular_grupo - Vincular el grupo de Telegram actual a tu cuenta (Jefes, Admins y Empleadas Independientes)\n' +
@@ -294,25 +287,6 @@ export class TelegramAuthUpdate {
         `\`${token}\`\n\n` +
         `Usa este token para autenticar tu panel externo conectándote al flujo de Server-Sent Events (SSE).`,
       { parse_mode: 'Markdown' },
-    );
-  }
-
-  @Action('ver_menu')
-  async onVerMenu(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    await ctx.reply(
-      'Aquí tienes nuestro menú de pasteles:\n' +
-        '1. Tres Leches 🍰\n' +
-        '2. Selva Negra 🍫\n' +
-        '3. Tarta de Fresa 🍓',
-    );
-  }
-
-  @Action('ver_ayuda')
-  async onVerAyuda(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery();
-    await ctx.reply(
-      'Puedes usar /start para ver el menú principal, o vincular tu cuenta con /vincular <código> si eres personal.',
     );
   }
 }

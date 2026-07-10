@@ -364,13 +364,9 @@ export class ServicesService implements OnModuleInit {
         await this.bot.telegram.sendMessage(
           servicio.clienteTelegramId,
           `❌ *Tu solicitud de servicio ha sido rechazada.* \n\n` +
-            `Lamentamos el inconveniente. Puedes volver al catálogo o iniciar un nuevo flujo usando el botón de abajo:`,
+            `Lamentamos el inconveniente. Para iniciar un nuevo servicio, por favor utiliza un enlace de contratación desde nuestra web.`,
           {
             parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [Markup.button.callback('👩‍🍳 Ver Empleadas', 'ver_empleadas')],
-              [Markup.button.callback('🏠 Volver al Menú', 'ver_menu')],
-            ]),
           },
         );
       } catch (err) {
@@ -689,27 +685,29 @@ export class ServicesService implements OnModuleInit {
     }
 
     // Configurar Timeout de 2 minutos (120000 ms) para expirar la oferta si no responde
-    const timeout = setTimeout(async () => {
-      try {
-        const checkViaje = await this.viajesRepository.findOne({
-          where: { id: viajeId },
-        });
-        if (
-          checkViaje &&
-          checkViaje.estado === 'notificado' &&
-          checkViaje.choferId === nearestDriver.id
-        ) {
-          console.log(
-            `[dispatchViaje] Oferta expirada por timeout para viaje ${viajeId}, chofer ${nearestDriver.id}`,
+    const timeout = setTimeout(() => {
+      void (async () => {
+        try {
+          const checkViaje = await this.viajesRepository.findOne({
+            where: { id: viajeId },
+          });
+          if (
+            checkViaje &&
+            checkViaje.estado === 'notificado' &&
+            checkViaje.choferId === nearestDriver.id
+          ) {
+            console.log(
+              `[dispatchViaje] Oferta expirada por timeout para viaje ${viajeId}, chofer ${nearestDriver.id}`,
+            );
+            await this.expirarOfertaYContinuar(viajeId, nearestDriver.id);
+          }
+        } catch (timeoutErr) {
+          console.error(
+            `[dispatchViaje] Error en timeout de viaje ${viajeId}:`,
+            timeoutErr,
           );
-          await this.expirarOfertaYContinuar(viajeId, nearestDriver.id);
         }
-      } catch (timeoutErr) {
-        console.error(
-          `[dispatchViaje] Error en timeout de viaje ${viajeId}:`,
-          timeoutErr,
-        );
-      }
+      })();
     }, 120000);
     this.dispatchTimeouts.set(viajeId, timeout);
     console.log(`[dispatchViaje] Timeout establecido para viaje ${viajeId}`);
@@ -786,15 +784,13 @@ export class ServicesService implements OnModuleInit {
   startWaitTimeout(servicioId: string, durationMs: number = 600000) {
     this.clearWaitTimeout(servicioId);
 
-    const timeout = setTimeout(async () => {
-      try {
-        await this.handleWaitTimeoutExpired(servicioId);
-      } catch (err) {
+    const timeout = setTimeout(() => {
+      void this.handleWaitTimeoutExpired(servicioId).catch((err) => {
         console.error(
           `Error handling wait timeout for service ${servicioId}:`,
           err,
         );
-      }
+      });
     }, durationMs);
 
     this.waitTimeouts.set(servicioId, timeout);
