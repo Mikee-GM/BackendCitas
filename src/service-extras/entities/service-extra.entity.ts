@@ -14,30 +14,51 @@ export class ExtrasServicio {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
-  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   id: string;
 
   @Column('uuid', { name: 'servicio_id' })
-  @ApiProperty({ description: 'Servicio Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Servicio Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   servicioId: string;
 
   @Column('uuid', { name: 'extra_catalogo_id' })
-  @ApiProperty({ description: 'Extra Catalogo Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Extra Catalogo Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   extraCatalogoId: string;
 
   @Column('numeric', { name: 'precio_cobrado', precision: 10, scale: 2 })
   @ApiProperty({ description: 'Precio Cobrado', example: '1200.00' })
   precioCobrado: string;
 
-  @Column('enum', { name: 'metodo_pago', enum: ['tarjeta', 'transferencia'] })
-  @ApiProperty({ description: 'Metodo Pago', enum: ['tarjeta', 'transferencia'], example: 'tarjeta' })
-  metodoPago: 'tarjeta' | 'transferencia';
+  @Column('enum', {
+    name: 'metodo_pago',
+    enum: ['tarjeta', 'transferencia', 'efectivo'],
+  })
+  @ApiProperty({
+    description: 'Metodo Pago',
+    enum: ['tarjeta', 'transferencia', 'efectivo'],
+    example: 'tarjeta',
+  })
+  metodoPago: 'tarjeta' | 'transferencia' | 'efectivo';
 
   @Column('timestamp with time zone', {
     name: 'registrado_at',
     default: () => 'now()',
   })
-  @ApiProperty({ description: 'Registrado At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiProperty({
+    description: 'Registrado At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   registradoAt: Date;
 
   @ManyToOne(

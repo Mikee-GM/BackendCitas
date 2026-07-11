@@ -35,6 +35,10 @@ interface SessionData {
   /** ID del servicio en_curso al que se encadenará la nueva cita */
   servicioPrevioId?: string;
   chatHistory?: { role: 'user' | 'model'; parts: { text: string }[] }[];
+  extraSelection?: {
+    servicioId: string;
+    extraId: string;
+  };
 }
 
 interface BotContext extends Context {
@@ -112,7 +116,7 @@ export class TelegramBookingUpdate {
 
   async sendDelayedReply(ctx: BotContext, text: string) {
     try {
-      const delayMs = 20000; // 30 segundos (medio minuto)
+      const delayMs = 1000; // 30 segundos (medio minuto)
 
       // Enviar la acción de "escribiendo" de inmediato
       await ctx.sendChatAction('typing').catch(() => {});
@@ -482,7 +486,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
   }
 
   @Action(/^agregar_extra_list:(.+)$/)
-  async onAgregarExtraList(@Ctx() ctx: Context) {
+  async onAgregarExtraList(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
     const match = (ctx as any).match;
     if (!match) return;
@@ -512,10 +516,16 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       return;
     }
 
+    if (!ctx.session) {
+      ctx.session = {};
+    }
+    // Guardar el servicioId inicial en la sesión
+    ctx.session.extraSelection = { servicioId, extraId: '' };
+
     const inlineButtons = extras.map((extra) => [
       Markup.button.callback(
         `➕ ${extra.nombre} ($${extra.precio})`,
-        `agregar_extra_sel:${servicioId}:${extra.id}`,
+        `agregar_extra_sel:${extra.id}`,
       ),
     ]);
 
@@ -526,7 +536,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
 
     await ctx.editMessageText(
       `➕ *Selecciona el servicio extra a agregar:*\n\n` +
-        `El método de pago se heredará automáticamente como *${servicio.metodoPago.toUpperCase()}*.`,
+        `Se te solicitará seleccionar el método de pago del extra en el siguiente paso.`,
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard(inlineButtons),
@@ -534,13 +544,83 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     );
   }
 
-  @Action(/^agregar_extra_sel:(.+):(.+)$/)
-  async onAgregarExtraSel(@Ctx() ctx: Context) {
+  @Action(/^agregar_extra_sel:(.+)$/)
+  async onAgregarExtraSel(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
     const match = (ctx as any).match;
     if (!match) return;
-    const servicioId = match[1];
-    const extraId = match[2];
+    const extraId = match[1];
+
+    const session = ctx.session;
+    if (
+      !session ||
+      !session.extraSelection ||
+      !session.extraSelection.servicioId
+    ) {
+      await ctx.reply(
+        '❌ La sesión ha expirado o el menú es antiguo. Por favor, vuelve a presionar "Agregar Extra" en el panel.',
+      );
+      return;
+    }
+
+    const servicioId = session.extraSelection.servicioId;
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: servicioId },
+    });
+
+    const extra = await this.extrasCatalogoRepository.findOne({
+      where: { id: extraId },
+    });
+
+    if (!servicio || !extra) {
+      await ctx.reply('❌ Servicio o extra no encontrado.');
+      return;
+    }
+
+    // Guardar el extraId seleccionado en la sesión
+    session.extraSelection.extraId = extraId;
+
+    const inlineButtons = [
+      [
+        Markup.button.callback('💳 Tarjeta', `agregar_extra_pay:tarjeta`),
+        Markup.button.callback(
+          '📱 Transferencia',
+          `agregar_extra_pay:transferencia`,
+        ),
+      ],
+      [Markup.button.callback('💵 Efectivo', `agregar_extra_pay:efectivo`)],
+      [Markup.button.callback('🔙 Volver', `agregar_extra_list:${servicioId}`)],
+    ];
+
+    await ctx.editMessageText(
+      `💳 *Selecciona el método de pago* para el extra *${extra.nombre}* ($${extra.precio}):\n\n` +
+        `Las ganancias de los extras van directamente a ti.`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard(inlineButtons),
+      },
+    );
+  }
+
+  @Action(/^agregar_extra_pay:(.+)$/)
+  async onAgregarExtraPay(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const metodoPago = match[1] as 'tarjeta' | 'transferencia' | 'efectivo';
+
+    const session = ctx.session;
+    if (!session || !session.extraSelection) {
+      await ctx.reply(
+        '❌ La sesión ha expirado o el menú es antiguo. Por favor, vuelve a intentar agregar el extra.',
+      );
+      return;
+    }
+
+    const { servicioId, extraId } = session.extraSelection;
+    // Limpiar selección de la sesión
+    delete session.extraSelection;
 
     const servicio = await this.serviciosRepository.findOne({
       where: { id: servicioId },
@@ -556,7 +636,6 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       return;
     }
 
-    // Buscar el usuario del bot para registrar quién lo hizo
     const telegramId = ctx.from?.id.toString();
     const user = await this.usuariosRepository.findOne({
       where: { telegramChatId: telegramId },
@@ -567,32 +646,51 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       return;
     }
 
-    // Registrar el extra en el servicio
+    // Registrar el extra en el servicio con el metodo de pago seleccionado
     const extraServicio = this.extrasServicioRepository.create({
       servicioId: servicio.id,
       extraCatalogoId: extra.id,
       precioCobrado: extra.precio,
-      metodoPago: servicio.metodoPago as any, // 'tarjeta' | 'transferencia'
+      metodoPago: metodoPago,
       registradoPor: user,
     });
 
     await this.extrasServicioRepository.save(extraServicio);
 
-    // Volver a cargar el servicio actualizado por el trigger de base de datos
+    // Volver a cargar el servicio actualizado con la relación de extras
     const servicioActualizado = await this.serviciosRepository.findOne({
       where: { id: servicioId },
-      relations: { cliente: true, empleada: true },
+      relations: {
+        cliente: true,
+        empleada: true,
+        extrasServicios: { extraCatalogo: true },
+      },
     });
 
     const total = servicioActualizado?.totalFinal || servicio.totalFinal;
-    const totalExtras = servicioActualizado?.totalExtras || '0.00';
+    const extrasList = servicioActualizado?.extrasServicios || [];
+    const totalExtras = extrasList
+      .reduce((sum, e) => sum + Number(e.precioCobrado), 0)
+      .toFixed(2);
+
+    let extrasBreakdownStr = '';
+    if (extrasList.length > 0) {
+      extrasBreakdownStr =
+        `• *Desglose de Extras:*\n` +
+        extrasList
+          .map(
+            (e) =>
+              `  - ${e.extraCatalogo?.nombre || 'Extra'}: $${e.precioCobrado} (${e.metodoPago.toUpperCase()})`,
+          )
+          .join('\n') +
+        '\n';
+    }
 
     await ctx.reply(
-      `✅ Servicio extra *${extra.nombre}* ($${extra.precio}) agregado al servicio con éxito.`,
+      `✅ Servicio extra *${extra.nombre}* ($${extra.precio}) agregado con método de pago *${metodoPago.toUpperCase()}* con éxito.`,
       { parse_mode: 'Markdown' },
     );
 
-    // Actualizar el mensaje principal de control en curso enviándole el nuevo menú
     const inlineButtons: any[] = [
       [
         Markup.button.callback(
@@ -600,28 +698,22 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
           `finalizar_servicio:${servicio.id}`,
         ),
       ],
-    ];
-
-    if (
-      servicio.metodoPago === 'tarjeta' ||
-      servicio.metodoPago === 'transferencia'
-    ) {
-      inlineButtons.push([
+      [
         Markup.button.callback(
           '➕ Agregar Extra',
           `agregar_extra_list:${servicio.id}`,
         ),
-      ]);
-    }
+      ],
+    ];
 
-    // Editar el mensaje original para volver a mostrar el estado en curso
     const updatedMsg =
       `💼 *¡Servicio en Curso!* 🟢\n\n` +
-      `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-      `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
-      `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
-      `• *Extras Acumulados:* $${totalExtras}\n` +
-      `• *Total Acumulado:* $${total}\n\n` +
+      `• *Cliente:* ${servicioActualizado?.cliente?.nombreTelegram || 'Desconocido'}\n` +
+      `• *Duración:* ${servicioActualizado?.duracionPactadaHoras} horas\n` +
+      `• *Método de Pago:* ${servicioActualizado?.metodoPago?.toUpperCase() || ''}\n` +
+      `• *Total de Extras:* $${totalExtras}\n` +
+      (extrasBreakdownStr ? `${extrasBreakdownStr}` : '') +
+      `• *Total Acumulado del Servicio (Base):* $${total}\n\n` +
       `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`;
 
     await ctx.editMessageText(updatedMsg, {
@@ -629,7 +721,6 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       ...Markup.inlineKeyboard(inlineButtons),
     });
   }
-
   @Action(/^finalizar_servicio:(.+)$/)
   async onFinalizarServicio(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -795,11 +886,30 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         cliente: true,
         empleada: { usuario: true, jefe: true },
         jefe: true,
+        extrasServicios: { extraCatalogo: true },
       },
     });
 
     const total =
       servicioActualizado?.totalFinal || servicio.totalFinal || '0.00';
+
+    const extrasList = servicioActualizado?.extrasServicios || [];
+    const totalExtras = extrasList
+      .reduce((sum, e) => sum + Number(e.precioCobrado), 0)
+      .toFixed(2);
+
+    let extrasBreakdownStr = '';
+    if (extrasList.length > 0) {
+      extrasBreakdownStr =
+        `\n🎁 *Servicios Extras (${extrasList.length}):* $${totalExtras}\n` +
+        extrasList
+          .map(
+            (e) =>
+              `  - ${e.extraCatalogo?.nombre || 'Extra'}: $${e.precioCobrado} (${e.metodoPago.toUpperCase()})`,
+          )
+          .join('\n') +
+        '\n';
+    }
 
     // 1. Editar el mensaje del botón "Finalizar Servicio" con el resumen del servicio
     const resumenEmpText =
@@ -808,8 +918,12 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
       `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
       `• *Duración Real:* ${duracionFormatted}\n` +
-      `• *Total Cobrado:* $${total}\n` +
-      `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+      `• *Total Cobrado del Servicio:* $${total}\n` +
+      `• *Método de Pago Servicio:* ${servicio.metodoPago.toUpperCase()}\n` +
+      (extrasBreakdownStr
+        ? `${extrasBreakdownStr}\n*(Nota: Las ganancias de extras van directo a ti)*`
+        : '') +
+      `\n\n` +
       `¡Excelente trabajo! 🎉`;
 
     try {
@@ -832,6 +946,19 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
 
     // 3. Enviar mensaje de resumen y solicitar calificación al cliente
     if (servicio.cliente?.telegramChatId) {
+      let clientExtrasStr = '';
+      if (extrasList.length > 0) {
+        clientExtrasStr =
+          `• *Servicios Extras (A pagar a la empleada):* $${totalExtras}\n` +
+          extrasList
+            .map(
+              (e) =>
+                `  - ${e.extraCatalogo?.nombre || 'Extra'}: $${e.precioCobrado} (${e.metodoPago.toUpperCase()})`,
+            )
+            .join('\n') +
+          '\n';
+      }
+
       const resumenCliText =
         `🏁 *¡Tu servicio ha finalizado!* 🍰\n\n` +
         `📝 *Resumen de tu Servicio:*\n` +
@@ -840,6 +967,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         `• *Duración Real:* ${duracionFormatted}\n` +
         `• *Total a Pagar:* $${total}\n` +
         `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
+        (clientExtrasStr ? `${clientExtrasStr}` : '') +
         (loyaltyAward
           ? `• *Puntos Ganados:* ${loyaltyAward.pointsEarned}\n` +
             `• *Saldo de Puntos:* ${loyaltyAward.pointsBalance}\n` +
@@ -969,18 +1097,12 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       ],
     ];
 
-    if (
-      servicio &&
-      (servicio.metodoPago === 'tarjeta' ||
-        servicio.metodoPago === 'transferencia')
-    ) {
-      inlineButtons.push([
-        Markup.button.callback(
-          '➕ Agregar Extra',
-          `agregar_extra_list:${servicioId}`,
-        ),
-      ]);
-    }
+    inlineButtons.push([
+      Markup.button.callback(
+        '➕ Agregar Extra',
+        `agregar_extra_list:${servicioId}`,
+      ),
+    ]);
 
     await ctx.editMessageText(originalText, {
       parse_mode: 'Markdown',

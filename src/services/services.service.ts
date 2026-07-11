@@ -181,6 +181,9 @@ export class ServicesService implements OnModuleInit {
     // 1. Actualizar estado del servicio a 'en_curso'
     servicio.estado = 'en_curso';
     servicio.jefeId = jefeId;
+    if (!servicio.horaInicioServicio) {
+      servicio.horaInicioServicio = new Date();
+    }
     await this.serviciosRepository.save(servicio);
 
     // Actualizar disponibilidad de la empleada a false (ocupada)
@@ -240,17 +243,12 @@ export class ServicesService implements OnModuleInit {
             ],
           ];
 
-          if (
-            servicio.metodoPago === 'tarjeta' ||
-            servicio.metodoPago === 'transferencia'
-          ) {
-            inlineButtons.push([
-              Markup.button.callback(
-                '➕ Agregar Extra',
-                `agregar_extra_list:${servicio.id}`,
-              ),
-            ]);
-          }
+          inlineButtons.push([
+            Markup.button.callback(
+              '➕ Agregar Extra',
+              `agregar_extra_list:${servicio.id}`,
+            ),
+          ]);
 
           const empMsg = await this.bot.telegram.sendMessage(
             targetChatId,
