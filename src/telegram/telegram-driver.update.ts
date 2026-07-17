@@ -1,4 +1,4 @@
-import { Inject, forwardRef } from '@nestjs/common';
+import { Inject, forwardRef, BeforeApplicationShutdown } from '@nestjs/common';
 import { Update, Ctx, Action } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,8 +11,26 @@ import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { Servicios } from '../services/entities/service.entity';
 
+interface DriverCacheEntry {
+  userId: string;
+  id: string;
+  rol: string;
+  nombre: string;
+  telefono: string;
+  vehiculoMarca?: string | null;
+  vehiculoModelo?: string | null;
+  vehiculoColor?: string | null;
+  vehiculoPlaca?: string | null;
+  cachedAt: number;
+  error?: 'no_user_or_not_chofer' | 'no_profile';
+}
+
 @Update()
-export class TelegramDriverUpdate {
+export class TelegramDriverUpdate implements BeforeApplicationShutdown {
+  private readonly driverIdentityCache = new Map<string, DriverCacheEntry>();
+
+  private readonly cacheCleanupInterval: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Usuarios)
     private readonly usuariosRepository: Repository<Usuarios>,
@@ -22,18 +40,90 @@ export class TelegramDriverUpdate {
     private readonly servicesService: ServicesService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
-  ) {}
+  ) {
+    this.cacheCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [key, cached] of this.driverIdentityCache.entries()) {
+        if (now - cached.cachedAt > 3600000) {
+          this.driverIdentityCache.delete(key);
+        }
+      }
+    }, 300000);
+  }
+
+  beforeApplicationShutdown() {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+    }
+  }
+
+  private async getChoferFromCache(
+    telegramId: string,
+  ): Promise<DriverCacheEntry> {
+    const cached = this.driverIdentityCache.get(telegramId);
+    const now = Date.now();
+    if (cached && now - cached.cachedAt < 600000) {
+      return cached;
+    }
+
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+      relations: { choferes: true },
+    });
+
+    if (!user || user.rol !== 'chofer') {
+      const entry = {
+        userId: user?.id || '',
+        id: '',
+        rol: user?.rol || '',
+        nombre: '',
+        telefono: '',
+        cachedAt: now,
+        error: 'no_user_or_not_chofer' as const,
+      };
+      this.driverIdentityCache.set(telegramId, entry);
+      return entry;
+    }
+
+    if (!user.choferes) {
+      const entry = {
+        userId: user.id,
+        id: '',
+        rol: user.rol,
+        nombre: '',
+        telefono: '',
+        cachedAt: now,
+        error: 'no_profile' as const,
+      };
+      this.driverIdentityCache.set(telegramId, entry);
+      return entry;
+    }
+
+    const entry = {
+      userId: user.id,
+      id: user.choferes.id,
+      rol: user.rol,
+      nombre: user.choferes.nombre,
+      telefono: user.choferes.telefono,
+      vehiculoMarca: user.choferes.vehiculoMarca,
+      vehiculoModelo: user.choferes.vehiculoModelo,
+      vehiculoColor: user.choferes.vehiculoColor,
+      vehiculoPlaca: user.choferes.vehiculoPlaca,
+      cachedAt: now,
+    };
+
+    this.driverIdentityCache.set(telegramId, entry);
+    return entry;
+  }
 
   @Action(/^aceptar_viaje:(.+)$/)
   async onAceptarViaje(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ Solo los choferes vinculados pueden tomar este viaje.',
         { show_alert: true },
@@ -41,11 +131,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery(
         '❌ No se encontró tu perfil de chofer en el sistema.',
         { show_alert: true },
@@ -97,11 +183,9 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: clickerTelegramId },
-    });
+    const chofer = await this.getChoferFromCache(clickerTelegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ Solo los choferes vinculados pueden tomar este viaje.',
         { show_alert: true },
@@ -109,11 +193,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery(
         '❌ No se encontró tu perfil de chofer en el sistema.',
         { show_alert: true },
@@ -144,6 +224,9 @@ export class TelegramDriverUpdate {
     });
 
     if (result) {
+      // Invalidad caché ya que chofer.disponible cambió a false
+      this.driverIdentityCache.delete(clickerTelegramId);
+
       // Cancelar el timeout de despacho del viaje
       this.servicesService.clearDispatchTimeout(viajeId);
 
@@ -196,13 +279,13 @@ export class TelegramDriverUpdate {
           },
         });
 
-        // Notificar a la empleada que el chofer va en camino con sus datos y datos de vehículo
-        const empUser = trip.servicio.empleada?.usuario;
-        if (empUser && empUser.telegramChatId) {
-          const targetChatId = empUser.telegramChatId;
-          const threadId = undefined;
+        // Notificaciones en paralelo usando Promise.allSettled
+        const notifyEmployeePromise = (async () => {
+          const empUser = trip.servicio.empleada?.usuario;
+          if (empUser && empUser.telegramChatId) {
+            const targetChatId = empUser.telegramChatId;
+            const threadId = undefined;
 
-          if (targetChatId) {
             const vehiculoInfo = [
               chofer.vehiculoMarca
                 ? `• *Marca:* ${chofer.vehiculoMarca}`
@@ -242,64 +325,70 @@ export class TelegramDriverUpdate {
               // Guardar el ID del mensaje para poder borrarlo después
               trip.telegramEmpleadaMsgChoferCaminoId =
                 sentMsg.message_id.toString();
-              await this.dataSource.getRepository(Viajes).save(trip);
+              await this.dataSource.getRepository(Viajes).update(trip.id, {
+                telegramEmpleadaMsgChoferCaminoId:
+                  trip.telegramEmpleadaMsgChoferCaminoId,
+              });
             } catch (sendErr) {
               console.error('Error al notificar a la empleada:', sendErr);
             }
           }
-        }
+        })();
 
-        // Enviar información del viaje por privado al chofer
-        if (user.telegramChatId) {
-          const empLat = trip.servicio.empleada.ubicacionLat;
-          const empLng = trip.servicio.empleada.ubicacionLng;
-          let empLocationText = 'No registrada';
-          const inlineButtons: any[][] = [];
+        const notifyDriverPromise = (async () => {
+          if (clickerTelegramId) {
+            const empLat = trip.servicio.empleada.ubicacionLat;
+            const empLng = trip.servicio.empleada.ubicacionLng;
+            let empLocationText = 'No registrada';
+            const inlineButtons: any[][] = [];
 
-          if (empLat && empLng) {
-            empLocationText = `[Ver en Google Maps](https://www.google.com/maps/search/?api=1&query=${empLat},${empLng})`;
+            if (empLat && empLng) {
+              empLocationText = `[Ver en Google Maps](https://www.google.com/maps/search/?api=1&query=${empLat},${empLng})`;
+              inlineButtons.push([
+                Markup.button.url(
+                  '🗺️ Google Maps',
+                  `https://www.google.com/maps/search/?api=1&query=${empLat},${empLng}`,
+                ),
+                Markup.button.url(
+                  '🚙 Waze',
+                  `https://waze.com/ul?ll=${empLat},${empLng}&navigate=yes`,
+                ),
+              ]);
+            }
+
             inlineButtons.push([
-              Markup.button.url(
-                '🗺️ Google Maps',
-                `https://www.google.com/maps/search/?api=1&query=${empLat},${empLng}`,
-              ),
-              Markup.button.url(
-                '🚙 Waze',
-                `https://waze.com/ul?ll=${empLat},${empLng}&navigate=yes`,
+              Markup.button.callback(
+                '📍 He Llegado con la Empleada',
+                `chofer_llegado:${trip.id}`,
               ),
             ]);
+
+            const privateMessageText =
+              `🚗 *¡Viaje Tomado con Éxito!* 🚗\n\n` +
+              `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
+              `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+              `• *Ubicación de Recogida (Empleada):* ${empLocationText}\n\n` +
+              `Por favor, presiona el botón de abajo una vez hayas llegado con la empleada.`;
+
+            try {
+              await ctx.telegram.sendMessage(
+                clickerTelegramId,
+                privateMessageText,
+                {
+                  parse_mode: 'Markdown',
+                  ...Markup.inlineKeyboard(inlineButtons),
+                },
+              );
+            } catch (sendErr) {
+              console.error(
+                'Error al enviar mensaje privado al chofer:',
+                sendErr,
+              );
+            }
           }
+        })();
 
-          inlineButtons.push([
-            Markup.button.callback(
-              '📍 He Llegado con la Empleada',
-              `chofer_llegado:${trip.id}`,
-            ),
-          ]);
-
-          const privateMessageText =
-            `🚗 *¡Viaje Tomado con Éxito!* 🚗\n\n` +
-            `• *Empleada:* ${trip.servicio.empleada.nombreArtistico}\n` +
-            `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-            `• *Ubicación de Recogida (Empleada):* ${empLocationText}\n\n` +
-            `Por favor, presiona el botón de abajo una vez hayas llegado con la empleada.`;
-
-          try {
-            await ctx.telegram.sendMessage(
-              user.telegramChatId,
-              privateMessageText,
-              {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard(inlineButtons),
-              },
-            );
-          } catch (sendErr) {
-            console.error(
-              'Error al enviar mensaje privado al chofer:',
-              sendErr,
-            );
-          }
-        }
+        await Promise.allSettled([notifyEmployeePromise, notifyDriverPromise]);
       }
     } else {
       await ctx.answerCbQuery(
@@ -335,11 +424,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -347,11 +434,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -413,11 +496,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -425,11 +506,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -464,8 +541,10 @@ export class TelegramDriverUpdate {
     }
 
     // Actualizar el viaje a llegado
+    await this.dataSource
+      .getRepository(Viajes)
+      .update(trip.id, { estado: 'llegado' });
     trip.estado = 'llegado';
-    await this.dataSource.getRepository(Viajes).save(trip);
 
     await ctx.answerCbQuery('📍 Has llegado con la empleada.');
 
@@ -519,7 +598,10 @@ export class TelegramDriverUpdate {
           // Guardar el ID del mensaje para poder borrarlo después
           trip.telegramEmpleadaMsgChoferLlegadoId =
             sentMsg.message_id.toString();
-          await this.dataSource.getRepository(Viajes).save(trip);
+          await this.dataSource.getRepository(Viajes).update(trip.id, {
+            telegramEmpleadaMsgChoferLlegadoId:
+              trip.telegramEmpleadaMsgChoferLlegadoId,
+          });
         } catch (telegramErr) {
           console.error(
             `Error al notificar a la empleada sobre la llegada (chatId: ${empUserArrived.telegramChatId}):`,
@@ -629,11 +711,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -641,11 +721,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -707,11 +783,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -719,11 +793,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -735,7 +805,7 @@ export class TelegramDriverUpdate {
 
     const trip = await this.dataSource.getRepository(Viajes).findOne({
       where: { id: viajeId },
-      relations: { servicio: { cliente: true, empleada: true } },
+      relations: { servicio: { cliente: true, empleada: { usuario: true } } },
     });
 
     if (!trip) {
@@ -758,9 +828,13 @@ export class TelegramDriverUpdate {
     }
 
     // Actualizar el viaje a en_curso
+    const now = new Date();
+    await this.dataSource.getRepository(Viajes).update(trip.id, {
+      estado: 'en_curso',
+      horaInicioViaje: now,
+    });
     trip.estado = 'en_curso';
-    trip.horaInicioViaje = new Date();
-    await this.dataSource.getRepository(Viajes).save(trip);
+    trip.horaInicioViaje = now;
 
     // Cancelar el timeout de espera de la empleada
     this.servicesService.clearWaitTimeout(trip.servicioId);
@@ -770,16 +844,11 @@ export class TelegramDriverUpdate {
     );
 
     // Borrar mensajes previos del chat de la empleada ("chofer va en camino" y "chofer ha llegado")
-    const tripConUsuario = await this.dataSource.getRepository(Viajes).findOne({
-      where: { id: viajeId },
-      relations: { servicio: { empleada: { usuario: true }, cliente: true } },
-    });
-    const empChatId =
-      tripConUsuario?.servicio?.empleada?.usuario?.telegramChatId;
+    const empChatId = trip?.servicio?.empleada?.usuario?.telegramChatId;
 
     if (empChatId) {
-      const msgCaminoId = tripConUsuario?.telegramEmpleadaMsgChoferCaminoId;
-      const msgLlegadoId = tripConUsuario?.telegramEmpleadaMsgChoferLlegadoId;
+      const msgCaminoId = trip?.telegramEmpleadaMsgChoferCaminoId;
+      const msgLlegadoId = trip?.telegramEmpleadaMsgChoferLlegadoId;
 
       if (msgCaminoId) {
         try {
@@ -927,11 +996,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -939,11 +1006,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -1005,11 +1068,9 @@ export class TelegramDriverUpdate {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+    const chofer = await this.getChoferFromCache(telegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para realizar esta acción.',
         { show_alert: true },
@@ -1017,11 +1078,7 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });
@@ -1061,45 +1118,78 @@ export class TelegramDriverUpdate {
       return;
     }
 
-    // Actualizar el viaje a finalizado
+    // Actualizar el viaje a finalizado en memoria
+    const horaFin = new Date();
     trip.estado = 'finalizado';
-    trip.horaFinViaje = new Date();
-    await this.dataSource.getRepository(Viajes).save(trip);
+    trip.horaFinViaje = horaFin;
 
-    // Marcar chofer como disponible nuevamente
-    chofer.disponible = true;
-    await this.dataSource.getRepository(Choferes).save(chofer);
+    // Preparar promesas de escritura paralela
+    const promises: Promise<any>[] = [];
 
-    // Actualizar tiempos en el servicio correspondiente
+    // Promesa 1: Viaje update dirigido
+    promises.push(
+      this.dataSource.getRepository(Viajes).update(trip.id, {
+        estado: 'finalizado',
+        horaFinViaje: horaFin,
+      }),
+    );
+
+    // Promesa 2: Chofer update dirigido
+    promises.push(
+      this.dataSource.getRepository(Choferes).update(chofer.id, {
+        disponible: true,
+      }),
+    );
+
+    // Promesa 3: Servicio update dirigido y borrado de forum topic si aplica
     if (trip.servicio) {
+      const serviceUpdateData: any = {};
       if (trip.tipo === 'ida') {
-        trip.servicio.horaInicioServicio = new Date();
+        const horaInicio = new Date();
+        trip.servicio.horaInicioServicio = horaInicio;
+        serviceUpdateData.horaInicioServicio = horaInicio;
       } else {
-        trip.servicio.horaLlegadaCasa = new Date();
+        const horaLlegada = new Date();
+        trip.servicio.horaLlegadaCasa = horaLlegada;
+        serviceUpdateData.horaLlegadaCasa = horaLlegada;
 
         // Eliminar el tema (hilo) del grupo de Telegram si es viaje de regreso (final del servicio completo)
         const jefeGrupoId =
           trip.servicio.jefe?.grupoTelegramId ||
           trip.servicio.empleada?.jefe?.grupoTelegramId;
         if (trip.servicio.telegramThreadId && jefeGrupoId) {
-          try {
-            await ctx.telegram.deleteForumTopic(
-              jefeGrupoId,
-              parseInt(trip.servicio.telegramThreadId, 10),
-            );
-            console.log(
-              `[onConfChoferFinalizoViaje] Forum topic ${trip.servicio.telegramThreadId} eliminado con éxito.`,
-            );
-          } catch (err) {
-            console.error(
-              'Error al eliminar forum topic al finalizar viaje de regreso:',
-              err,
-            );
-          }
+          promises.push(
+            ctx.telegram
+              .deleteForumTopic(
+                jefeGrupoId,
+                parseInt(trip.servicio.telegramThreadId, 10),
+              )
+              .then(() => {
+                console.log(
+                  `[onConfChoferFinalizoViaje] Forum topic ${trip.servicio.telegramThreadId} eliminado con éxito.`,
+                );
+              })
+              .catch((err) => {
+                console.error(
+                  'Error al eliminar forum topic al finalizar viaje de regreso:',
+                  err,
+                );
+              }),
+          );
         }
       }
-      await this.dataSource.getRepository(Servicios).save(trip.servicio);
+      promises.push(
+        this.dataSource
+          .getRepository(Servicios)
+          .update(trip.servicio.id, serviceUpdateData),
+      );
     }
+
+    // Ejecutar todas las promesas en paralelo
+    await Promise.all(promises);
+
+    // Invalidad caché del chofer ya que chofer.disponible cambió a true
+    this.driverIdentityCache.delete(telegramId);
 
     await ctx.answerCbQuery('🏁 Viaje finalizado con éxito.');
 
@@ -1195,20 +1285,14 @@ export class TelegramDriverUpdate {
     const match = (ctx as any).match;
     const viajeId = match[1];
 
-    const user = await this.usuariosRepository.findOne({
-      where: { telegramChatId: clickerTelegramId },
-    });
+    const chofer = await this.getChoferFromCache(clickerTelegramId);
 
-    if (!user || user.rol !== 'chofer') {
+    if (!chofer || chofer.error === 'no_user_or_not_chofer') {
       await ctx.answerCbQuery('❌ Acción no permitida.', { show_alert: true });
       return;
     }
 
-    const chofer = await this.dataSource.getRepository(Choferes).findOne({
-      where: { usuarioId: user.id },
-    });
-
-    if (!chofer) {
+    if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery('❌ No se encontró tu perfil de chofer.', {
         show_alert: true,
       });

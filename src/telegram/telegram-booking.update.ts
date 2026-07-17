@@ -74,6 +74,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
   >();
 
+  private readonly locationCleanupInterval: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Usuarios)
     private readonly usuariosRepository: Repository<Usuarios>,
@@ -100,7 +102,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly telegramBookingService: TelegramBookingService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
-    setInterval(() => {
+    this.locationCleanupInterval = setInterval(() => {
       const now = Date.now();
       let cleaned = 0;
       for (const [key, cached] of this.userLocationCache.entries()) {
@@ -119,6 +121,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   // Graceful Shutdown Hook: Flush any dirty/unsaved location updates to DB
   async beforeApplicationShutdown() {
+    if (this.locationCleanupInterval) {
+      clearInterval(this.locationCleanupInterval);
+    }
     this.logger.log(
       'Graceful shutdown: flushing dirty locations to database...',
     );
@@ -200,16 +205,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       // Enviar la acción de "escribiendo" de inmediato
       await ctx.sendChatAction('typing').catch(() => {});
 
-      // Telegram apaga el indicador tras ~5s, por lo que lo enviamos repetidamente cada 4 segundos
-      const intervalId = setInterval(() => {
-        ctx.sendChatAction('typing').catch(() => {});
-      }, 4000);
-
-      try {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      } finally {
-        clearInterval(intervalId);
-      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
 
       await ctx.reply(text, { parse_mode: 'Markdown' });
     } catch (err) {
@@ -909,48 +905,46 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     servicio.duracionFinalHoras = Number(duracionRealVal.toFixed(2));
     await this.serviciosRepository.save(servicio);
 
-    let loyaltyAward: {
-      pointsEarned: number;
-      pointsBalance: number;
-      tier: { name: string; code: string };
-    } | null = null;
+    let loyaltyAward: any = null;
 
-    try {
-      loyaltyAward = await this.loyaltyService.awardForFinalizedService(
-        servicio.id,
-      );
-    } catch (loyaltyErr) {
-      console.error(
-        `Error al otorgar puntos de lealtad para servicio ${servicio.id}:`,
-        loyaltyErr,
-      );
-    }
+    // Ejecutar operaciones independientes en paralelo
+    const loyaltyPromise = (async () => {
+      try {
+        loyaltyAward = await this.loyaltyService.awardForFinalizedService(
+          servicio.id,
+        );
+      } catch (loyaltyErr) {
+        console.error(
+          `Error al otorgar puntos de lealtad para servicio ${servicio.id}:`,
+          loyaltyErr,
+        );
+      }
+    })();
 
-    // Crear viaje de regreso automático para la empleada
-    try {
-      const viajesRepository =
-        this.serviciosRepository.manager.getRepository(Viajes);
-      const nuevoViajeRegreso = viajesRepository.create({
-        servicioId: servicio.id,
-        choferId: null,
-        tipo: 'regreso',
-        zona: 'domicilio',
-        tarifa: 50.0,
-        estado: 'notificado',
-      });
-      const viajeRegresoGuardado =
-        await viajesRepository.save(nuevoViajeRegreso);
-      await this.servicesService.dispatchViaje(viajeRegresoGuardado.id);
-    } catch (err) {
-      console.error('Error al crear viaje de regreso:', err);
-    }
+    const viajePromise = (async () => {
+      try {
+        await this.crearYDespacharViajeRegreso(servicio.id);
+      } catch (err) {
+        console.error('Error al crear viaje de regreso:', err);
+      }
+    })();
 
-    // Actualizar disponibilidad de la empleada a true (disponible)
-    if (servicio.empleadaId) {
-      await this.empleadasRepository.update(servicio.empleadaId, {
-        disponible: true,
-      });
-    }
+    const empleadaPromise = (async () => {
+      try {
+        if (servicio.empleadaId) {
+          await this.empleadasRepository.update(servicio.empleadaId, {
+            disponible: true,
+          });
+        }
+      } catch (err) {
+        console.error(
+          'Error al actualizar disponibilidad de la empleada:',
+          err,
+        );
+      }
+    })();
+
+    await Promise.allSettled([loyaltyPromise, viajePromise, empleadaPromise]);
 
     await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
 
@@ -1293,9 +1287,58 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         });
         return;
       }
+
+      // Throttle expired (toca escribir a DB) pero YA está en cache: NO findOne, actualizar DB directo
+      try {
+        if (cached.rol === 'chofer') {
+          await this.usuariosRepository.manager.update(Choferes, cached.id, {
+            ubicacionLat: parsedLat,
+            ubicacionLng: parsedLng,
+            ultimaUbicacionAt: new Date(),
+          });
+          // Update cache details
+          cached.lat = parsedLat;
+          cached.lng = parsedLng;
+          cached.lastSaved = nowTime;
+          cached.dirty = false;
+
+          // Emit real-time event to Jefes/Dashboard
+          this.realtimeEventsService.emitToJefes({
+            type: 'DRIVER_LOCATION_UPDATE',
+            choferId: cached.id,
+            lat: parsedLat,
+            lng: parsedLng,
+          });
+        } else if (cached.rol === 'empleada') {
+          await this.usuariosRepository.manager.update(Empleadas, cached.id, {
+            ubicacionLat: parsedLat,
+            ubicacionLng: parsedLng,
+            ultimaUbicacionAt: new Date(),
+          });
+          // Update cache details
+          cached.lat = parsedLat;
+          cached.lng = parsedLng;
+          cached.lastSaved = nowTime;
+          cached.dirty = false;
+
+          // Emit real-time event to Jefes/Dashboard
+          this.realtimeEventsService.emitToJefes({
+            type: 'EMPLOYEE_LOCATION_UPDATE',
+            empleadaId: cached.id,
+            lat: parsedLat,
+            lng: parsedLng,
+          });
+        }
+        return;
+      } catch (err) {
+        this.logger.error(
+          `Error updating location directly for telegramId=${telegramId}:`,
+          err,
+        );
+      }
     }
 
-    // Verificar si es personal del sistema (chofer o empleada)
+    // Si cached es undefined: Primera vez que se ve ese telegramId. Sí buscar en DB con relaciones.
     const user = await this.usuariosRepository.findOne({
       where: { telegramChatId: telegramId },
       relations: { choferes: true, empleadas: true },
@@ -1327,7 +1370,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           lng: user.choferes.ubicacionLng,
         });
 
-        if (!isEdited) {
+        // Solo notificar si no estaba en caché (primera vez) y no está editada
+        if (!cached && !isEdited) {
           await ctx.reply(
             `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}`,
           );
@@ -1360,7 +1404,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           lng: user.empleadas.ubicacionLng,
         });
 
-        if (!isEdited) {
+        // Solo notificar si no estaba en caché (primera vez) y no está editada
+        if (!cached && !isEdited) {
           await ctx.reply(
             `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}`,
           );
@@ -1474,6 +1519,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         clienteTelegramId: telegramId,
         iaActiva: false,
       });
+      // 1. SAVE INICIAL (INSERT)
       await this.serviciosRepository.save(nuevoServicioEnc);
 
       const jefeUser = await this.usuariosRepository.findOne({
@@ -1487,6 +1533,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             jefeUser.grupoTelegramId,
             `👤 Cliente: ${clientName}`,
           );
+          // Acumulamos en memoria
           nuevoServicioEnc.telegramThreadId =
             topic.message_thread_id.toString();
 
@@ -1528,7 +1575,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           );
         }
       }
-      await this.serviciosRepository.save(nuevoServicioEnc);
 
       // Calculate estimated start time from the active service
       let horaEstimadaStr = 'próximamente';
@@ -1541,9 +1587,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             servicioActivo.horaInicioServicio.getTime() +
               Number(servicioActivo.duracionPactadaHoras) * 60 * 60 * 1000,
           );
-          // Save to the new chained service
+          // Acumulamos en memoria
           nuevoServicioEnc.horaInicioEstimada = estimada;
-          await this.serviciosRepository.save(nuevoServicioEnc);
           horaEstimadaStr = estimada.toLocaleTimeString('es-MX', {
             hour: '2-digit',
             minute: '2-digit',
@@ -1581,8 +1626,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         ]),
       });
 
+      // Acumulamos en memoria
       nuevoServicioEnc.telegramClienteMensajeId =
         msgEnviadoEnc.message_id.toString();
+
+      // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
       await this.serviciosRepository.save(nuevoServicioEnc);
 
       // Notify jefe of new chained service
@@ -1610,6 +1658,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       clienteTelegramId: telegramId,
       iaActiva: false,
     });
+    // 1. SAVE INICIAL (INSERT)
     await this.serviciosRepository.save(nuevoServicio);
 
     const jefeUser = await this.usuariosRepository.findOne({
@@ -1623,6 +1672,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           jefeUser.grupoTelegramId,
           `👤 Cliente: ${clientName}`,
         );
+        // Acumulamos en memoria
         nuevoServicio.telegramThreadId = topic.message_thread_id.toString();
 
         const detailsMsg =
@@ -1663,7 +1713,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         );
       }
     }
-    await this.serviciosRepository.save(nuevoServicio);
 
     // Emit event to Jefes in real-time
     const serviceWithRelations = await this.serviciosRepository.findOne({
@@ -1710,7 +1759,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ...Markup.removeKeyboard(),
     });
 
+    // Acumulamos en memoria
     nuevoServicio.telegramClienteMensajeId = msg.message_id.toString();
+    // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
     await this.serviciosRepository.save(nuevoServicio);
   }
 
@@ -2529,5 +2580,20 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     } catch (err) {
       console.error('Error al editar mensaje de empleada tras prórroga:', err);
     }
+  }
+
+  private async crearYDespacharViajeRegreso(servicioId: string): Promise<void> {
+    const viajesRepository =
+      this.serviciosRepository.manager.getRepository(Viajes);
+    const nuevoViajeRegreso = viajesRepository.create({
+      servicioId,
+      choferId: null,
+      tipo: 'regreso',
+      zona: 'domicilio',
+      tarifa: 50.0,
+      estado: 'notificado',
+    });
+    const viajeRegresoGuardado = await viajesRepository.save(nuevoViajeRegreso);
+    await this.servicesService.dispatchViaje(viajeRegresoGuardado.id);
   }
 }
