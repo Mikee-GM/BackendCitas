@@ -10,12 +10,9 @@ export class RealtimeEventsService {
 
   getJefesStream(): Observable<MessageEvent> {
     return this.jefesSubject.asObservable().pipe(
-      map(
-        (data) =>
-          ({
-            data,
-          }) as MessageEvent,
-      ),
+      map((data) => ({
+        data,
+      })),
     );
   }
 
@@ -27,12 +24,9 @@ export class RealtimeEventsService {
       .get(empleadaId)!
       .asObservable()
       .pipe(
-        map(
-          (data) =>
-            ({
-              data,
-            }) as MessageEvent,
-        ),
+        map((data) => ({
+          data,
+        })),
       );
   }
 
@@ -44,12 +38,9 @@ export class RealtimeEventsService {
       .get(choferId)!
       .asObservable()
       .pipe(
-        map(
-          (data) =>
-            ({
-              data,
-            }) as MessageEvent,
-        ),
+        map((data) => ({
+          data,
+        })),
       );
   }
 

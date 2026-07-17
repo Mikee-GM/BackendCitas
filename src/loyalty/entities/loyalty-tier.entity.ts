@@ -2,6 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { ClientMembership } from './client-membership.entity';
 
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
+
 @Index('loyalty_tiers_code_key', ['code'], { unique: true })
 @Index('idx_loyalty_tiers_active_min_spend', ['active', 'minSpend'])
 @Entity('loyalty_tiers', { schema: 'public' })
@@ -30,18 +32,20 @@ export class LoyaltyTier {
     precision: 12,
     scale: 2,
     default: () => '0',
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiProperty({ description: 'Min Spend', example: 'Ejemplo' })
-  minSpend: string;
+  @ApiProperty({ description: 'Min Spend', example: 0 })
+  minSpend: number;
 
   @Column('numeric', {
     name: 'earn_rate',
     precision: 10,
     scale: 4,
     default: () => '0.1000',
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiProperty({ description: 'Earn Rate', example: 'Ejemplo' })
-  earnRate: string;
+  @ApiProperty({ description: 'Earn Rate', example: 0.1 })
+  earnRate: number;
 
   @Column('boolean', { name: 'active', default: () => 'true' })
   @ApiProperty({ description: 'Active', example: true })

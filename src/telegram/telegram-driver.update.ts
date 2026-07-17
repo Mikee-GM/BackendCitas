@@ -199,15 +199,8 @@ export class TelegramDriverUpdate {
         // Notificar a la empleada que el chofer va en camino con sus datos y datos de vehículo
         const empUser = trip.servicio.empleada?.usuario;
         if (empUser && empUser.telegramChatId) {
-          const isIndependent =
-            trip.servicio.empleada?.tipo === 'independiente';
-          const targetChatId = isIndependent
-            ? empUser.grupoTelegramId
-            : empUser.telegramChatId;
-          const threadId =
-            isIndependent && trip.servicio.telegramThreadId
-              ? parseInt(trip.servicio.telegramThreadId, 10)
-              : undefined;
+          const targetChatId = empUser.telegramChatId;
+          const threadId = undefined;
 
           if (targetChatId) {
             const vehiculoInfo = [
@@ -479,14 +472,8 @@ export class TelegramDriverUpdate {
     // Notificar a la empleada que el chofer ha llegado con la info de identificación
     const empUserArrived = trip.servicio?.empleada?.usuario;
     if (empUserArrived && empUserArrived.telegramChatId) {
-      const isIndependent = trip.servicio?.empleada?.tipo === 'independiente';
-      const targetChatId = isIndependent
-        ? empUserArrived.grupoTelegramId
-        : empUserArrived.telegramChatId;
-      const threadId =
-        isIndependent && trip.servicio?.telegramThreadId
-          ? parseInt(trip.servicio.telegramThreadId, 10)
-          : undefined;
+      const targetChatId = empUserArrived.telegramChatId;
+      const threadId = undefined;
 
       if (targetChatId) {
         const vehiculoInfo = [
@@ -787,11 +774,8 @@ export class TelegramDriverUpdate {
       where: { id: viajeId },
       relations: { servicio: { empleada: { usuario: true }, cliente: true } },
     });
-    const isIndependent =
-      tripConUsuario?.servicio?.empleada?.tipo === 'independiente';
-    const empChatId = isIndependent
-      ? tripConUsuario?.servicio?.empleada?.usuario?.grupoTelegramId
-      : tripConUsuario?.servicio?.empleada?.usuario?.telegramChatId;
+    const empChatId =
+      tripConUsuario?.servicio?.empleada?.usuario?.telegramChatId;
 
     if (empChatId) {
       const msgCaminoId = tripConUsuario?.telegramEmpleadaMsgChoferCaminoId;

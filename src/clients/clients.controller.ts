@@ -32,7 +32,12 @@ export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'clients', entity: Clientes, createDto: CreateClientDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'clients',
+    entity: Clientes,
+    createDto: CreateClientDto,
+    protected: true,
+  })
   create(@Body() createClientDto: CreateClientDto) {
     return this.clientsService.create(createClientDto);
   }
@@ -50,7 +55,12 @@ export class ClientsController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'clients', entity: Clientes, updateDto: UpdateClientDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'clients',
+    entity: Clientes,
+    updateDto: UpdateClientDto,
+    protected: true,
+  })
   update(@Param('id') id: string, @Body() updateClientDto: UpdateClientDto) {
     return this.clientsService.update(+id, updateClientDto);
   }

@@ -18,7 +18,7 @@ export class CatalogExtrasService {
     const extra = this.extrasCatalogoRepository.create({
       empleadaId: createCatalogExtraDto.empleadaId,
       nombre: createCatalogExtraDto.nombre,
-      precio: createCatalogExtraDto.precio.toString(),
+      precio: createCatalogExtraDto.precio,
       activo: true,
     });
     return this.extrasCatalogoRepository.save(extra);
@@ -56,7 +56,7 @@ export class CatalogExtrasService {
       extra.nombre = updateCatalogExtraDto.nombre;
     }
     if (updateCatalogExtraDto.precio !== undefined) {
-      extra.precio = updateCatalogExtraDto.precio.toString();
+      extra.precio = updateCatalogExtraDto.precio;
     }
     return this.extrasCatalogoRepository.save(extra);
   }

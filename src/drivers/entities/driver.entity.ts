@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Usuarios } from '../../users/entities/user.entity';
 import { Viajes } from '../../trips/entities/trip.entity';
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
 
 @Index('idx_choferes_disponible', ['disponible'], {})
 @Index('choferes_pkey', ['id'], { unique: true })
@@ -20,11 +21,17 @@ export class Choferes {
     name: 'id',
     default: () => 'gen_random_uuid()',
   })
-  @ApiProperty({ description: 'Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   id: string;
 
   @Column('uuid', { name: 'usuario_id', unique: true })
-  @ApiProperty({ description: 'Usuario Id', example: '00000000-0000-4000-8000-000000000000' })
+  @ApiProperty({
+    description: 'Usuario Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
   usuarioId: string;
 
   @Column('character varying', { name: 'nombre', length: 255 })
@@ -44,31 +51,43 @@ export class Choferes {
     nullable: true,
     precision: 10,
     scale: 7,
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiPropertyOptional({ description: 'Ubicacion Lat', example: '19.432608' })
-  ubicacionLat: string | null;
+  @ApiPropertyOptional({ description: 'Ubicacion Lat', example: 19.432608 })
+  ubicacionLat: number | null;
 
   @Column('numeric', {
     name: 'ubicacion_lng',
     nullable: true,
     precision: 10,
     scale: 7,
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiPropertyOptional({ description: 'Ubicacion Lng', example: '-99.133209' })
-  ubicacionLng: string | null;
+  @ApiPropertyOptional({ description: 'Ubicacion Lng', example: -99.133209 })
+  ubicacionLng: number | null;
 
   @Column('timestamp with time zone', {
     name: 'ultima_ubicacion_at',
     nullable: true,
   })
-  @ApiPropertyOptional({ description: 'Ultima Ubicacion At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiPropertyOptional({
+    description: 'Ultima Ubicacion At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   ultimaUbicacionAt: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
     default: () => 'now()',
   })
-  @ApiProperty({ description: 'Created At', type: String, format: 'date-time', example: '2026-07-09T12:00:00.000Z' })
+  @ApiProperty({
+    description: 'Created At',
+    type: String,
+    format: 'date-time',
+    example: '2026-07-09T12:00:00.000Z',
+  })
   createdAt: Date;
 
   @Column('character varying', {

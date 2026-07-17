@@ -32,7 +32,12 @@ export class ExtensionsController {
   constructor(private readonly extensionsService: ExtensionsService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'extensions', entity: Prorrogas, createDto: CreateExtensionDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'extensions',
+    entity: Prorrogas,
+    createDto: CreateExtensionDto,
+    protected: true,
+  })
   create(@Body() createExtensionDto: CreateExtensionDto) {
     return this.extensionsService.create(createExtensionDto);
   }
@@ -50,7 +55,12 @@ export class ExtensionsController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'extensions', entity: Prorrogas, updateDto: UpdateExtensionDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'extensions',
+    entity: Prorrogas,
+    updateDto: UpdateExtensionDto,
+    protected: true,
+  })
   update(
     @Param('id') id: string,
     @Body() updateExtensionDto: UpdateExtensionDto,

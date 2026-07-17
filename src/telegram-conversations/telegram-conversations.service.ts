@@ -16,7 +16,10 @@ export class TelegramConversationsService {
     return `This action returns a #${id} telegramConversation`;
   }
 
-  update(id: number, updateTelegramConversationDto: UpdateTelegramConversationDto) {
+  update(
+    id: number,
+    updateTelegramConversationDto: UpdateTelegramConversationDto,
+  ) {
     return `This action updates a #${id} telegramConversation`;
   }
 

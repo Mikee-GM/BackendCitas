@@ -32,7 +32,12 @@ export class EmployeesController {
   constructor(private readonly employeesService: EmployeesService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'employees', entity: Empleadas, createDto: CreateEmployeeDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'employees',
+    entity: Empleadas,
+    createDto: CreateEmployeeDto,
+    protected: true,
+  })
   create(@Body() createEmployeeDto: CreateEmployeeDto) {
     return this.employeesService.create(createEmployeeDto);
   }
@@ -50,7 +55,12 @@ export class EmployeesController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'employees', entity: Empleadas, updateDto: UpdateEmployeeDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'employees',
+    entity: Empleadas,
+    updateDto: UpdateEmployeeDto,
+    protected: true,
+  })
   update(
     @Param('id') id: string,
     @Body() updateEmployeeDto: UpdateEmployeeDto,

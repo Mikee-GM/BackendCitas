@@ -16,6 +16,7 @@ import { TelegramAuthUpdate } from './telegram-auth.update';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+import { TelegramBookingService } from './telegram-booking.service';
 
 interface SessionData {
   step?:
@@ -71,47 +72,14 @@ export class TelegramBookingUpdate {
     @Inject(forwardRef(() => TelegramAuthUpdate))
     private readonly telegramAuthUpdate: TelegramAuthUpdate,
     private readonly loyaltyService: LoyaltyService,
+    private readonly telegramBookingService: TelegramBookingService,
   ) {}
 
   async getGroqResponse(
     systemPrompt: string,
     history: { role: 'user' | 'model'; parts: { text: string }[] }[],
   ): Promise<string> {
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      throw new Error('GROQ_API_KEY is not defined in environment variables');
-    }
-
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...history.map((msg) => ({
-        role: msg.role === 'model' ? 'assistant' : 'user',
-        content: msg.parts?.[0]?.text || '',
-      })),
-    ];
-
-    const response = await fetch(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages,
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Groq API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return this.telegramBookingService.getGroqResponse(systemPrompt, history);
   }
 
   async sendDelayedReply(ctx: BotContext, text: string) {
@@ -180,7 +148,7 @@ export class TelegramBookingUpdate {
       { parse_mode: 'Markdown' },
     );
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja en una agencia.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 
@@ -297,7 +265,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y pregúntale cuántas hor
         ).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       : 'próximamente';
 
-    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
+    const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja en una agencia.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 
@@ -809,14 +777,12 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     servicio.horaFinServicio = fin;
 
     // Calcular duración real en horas y formato legible (horas, minutos, segundos)
-    let duracionRealStr = servicio.duracionPactadaHoras;
-    let duracionRealVal = parseFloat(servicio.duracionPactadaHoras);
+    let duracionRealVal = servicio.duracionPactadaHoras;
     let duracionFormatted = `${servicio.duracionPactadaHoras} horas`;
     if (servicio.horaInicioServicio) {
       const inicio = new Date(servicio.horaInicioServicio);
       const diffMs = fin.getTime() - inicio.getTime();
       duracionRealVal = diffMs / (1000 * 60 * 60);
-      duracionRealStr = duracionRealVal.toFixed(2);
 
       const totalSeconds = Math.floor(diffMs / 1000);
       const hours = Math.floor(totalSeconds / 3600);
@@ -831,7 +797,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         parts.push(`${seconds} ${seconds === 1 ? 'segundo' : 'segundos'}`);
       duracionFormatted = parts.join(', ');
     }
-    servicio.duracionFinalHoras = duracionRealStr;
+    servicio.duracionFinalHoras = Number(duracionRealVal.toFixed(2));
     await this.serviciosRepository.save(servicio);
 
     let loyaltyAward: {
@@ -860,7 +826,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         choferId: null,
         tipo: 'regreso',
         zona: 'domicilio',
-        tarifa: '50.00',
+        tarifa: 50.0,
         estado: 'notificado',
       });
       const viajeRegresoGuardado =
@@ -975,7 +941,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
           : '\n') +
         `Por favor, califica el servicio recibido:`;
 
-      const duracionPactadaVal = parseFloat(servicio.duracionPactadaHoras);
+      const duracionPactadaVal = servicio.duracionPactadaHoras;
       const finalizoAntes = duracionRealVal < duracionPactadaVal;
 
       const inlineButtons: any[] = [
@@ -1039,7 +1005,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       const serviciosEncadenados = await this.serviciosRepository.find({
         where: {
           servicioPrevioId: servicioId,
-          estado: 'pendiente' as any, // just activated by PG trigger
+          estado: 'pendiente', // just activated by PG trigger
         },
         relations: { cliente: true, empleada: true },
         order: { createdAt: 'ASC' },
@@ -1158,9 +1124,8 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const message = (ctx.message ||
-      ctx.editedMessage ||
-      (ctx.update as any).edited_message) as any;
+    const message =
+      ctx.message || ctx.editedMessage || (ctx.update as any).edited_message;
     if (!message) return;
 
     let lat: string;
@@ -1193,8 +1158,8 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
 
     if (user) {
       if (user.rol === 'chofer' && user.choferes) {
-        user.choferes.ubicacionLat = lat;
-        user.choferes.ubicacionLng = lng;
+        user.choferes.ubicacionLat = parseFloat(lat);
+        user.choferes.ubicacionLng = parseFloat(lng);
         user.choferes.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.choferes);
         if (!isEdited) {
@@ -1206,8 +1171,8 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       }
 
       if (user.rol === 'empleada' && user.empleadas) {
-        user.empleadas.ubicacionLat = lat;
-        user.empleadas.ubicacionLng = lng;
+        user.empleadas.ubicacionLat = parseFloat(lat);
+        user.empleadas.ubicacionLng = parseFloat(lng);
         user.empleadas.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.empleadas);
         if (!isEdited) {
@@ -1264,35 +1229,28 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       return;
     }
 
-    const isIndependent = empleada.tipo === 'independiente';
-    let jefeId: string;
-
-    if (isIndependent) {
-      jefeId = empleada.usuarioId;
-    } else {
-      let jefe: Usuarios | null = null;
-      if (empleada.jefeId) {
-        jefe = await this.usuariosRepository.findOne({
-          where: { id: empleada.jefeId, activo: true },
-        });
-      }
-      if (!jefe) {
-        jefe = await this.usuariosRepository.findOne({
-          where: [
-            { rol: 'jefe', activo: true },
-            { rol: 'admin', activo: true },
-          ],
-        });
-      }
-
-      if (!jefe) {
-        await ctx.reply(
-          '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
-        );
-        return;
-      }
-      jefeId = jefe.id;
+    let jefe: Usuarios | null = null;
+    if (empleada.jefeId) {
+      jefe = await this.usuariosRepository.findOne({
+        where: { id: empleada.jefeId, activo: true },
+      });
     }
+    if (!jefe) {
+      jefe = await this.usuariosRepository.findOne({
+        where: [
+          { rol: 'jefe', activo: true },
+          { rol: 'admin', activo: true },
+        ],
+      });
+    }
+
+    if (!jefe) {
+      await ctx.reply(
+        '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
+      );
+      return;
+    }
+    const jefeId = jefe.id;
 
     // ─── FLUJO ENCADENADO ───────────────────────────────────────────────────
     if (isEncadenado) {
@@ -1300,11 +1258,11 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         clienteId: client.id,
         empleadaId: empleada.id,
         jefeId: jefeId,
-        duracionPactadaHoras: duracionPactadaHoras.toString(),
+        duracionPactadaHoras: duracionPactadaHoras,
         metodoPago: metodoPago,
-        ubicacionClienteLat: lat,
-        ubicacionClienteLng: lng,
-        precioBaseHoraPactado: empleada.precioBaseHora.toString(),
+        ubicacionClienteLat: parseFloat(lat),
+        ubicacionClienteLng: parseFloat(lng),
+        precioBaseHoraPactado: empleada.precioBaseHora,
         estado: 'pendiente_encadenado',
         notas: notasUbicacion,
         servicioPrevioId: servicioPrevioId || null,
@@ -1437,11 +1395,11 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       clienteId: client.id,
       empleadaId: empleada.id,
       jefeId: jefeId,
-      duracionPactadaHoras: duracionPactadaHoras.toString(),
+      duracionPactadaHoras: duracionPactadaHoras,
       metodoPago: metodoPago,
-      ubicacionClienteLat: lat,
-      ubicacionClienteLng: lng,
-      precioBaseHoraPactado: empleada.precioBaseHora.toString(),
+      ubicacionClienteLat: parseFloat(lat),
+      ubicacionClienteLng: parseFloat(lng),
+      precioBaseHoraPactado: empleada.precioBaseHora,
       estado: 'pendiente',
       notas: notasUbicacion,
       clienteTelegramId: telegramId,
@@ -1574,9 +1532,8 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     }
 
     // Actualizar duracion pactada
-    const nuevaDuracion =
-      Number(servicio.duracionPactadaHoras) + horasAExtender;
-    servicio.duracionPactadaHoras = nuevaDuracion.toString();
+    const nuevaDuracion = servicio.duracionPactadaHoras + horasAExtender;
+    servicio.duracionPactadaHoras = nuevaDuracion;
     // Resetear flag para que pueda volver a notificar 15 minutos antes de la nueva hora
     servicio.notificacionExtensionEnviada = false;
 
@@ -1765,16 +1722,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
             return;
           }
 
-          const isIndependentEmployee =
-            service.empleada &&
-            service.empleada.tipo === 'independiente' &&
-            service.empleada.usuarioId === user.id;
-
-          if (
-            user.rol !== 'jefe' &&
-            user.rol !== 'admin' &&
-            !isIndependentEmployee
-          ) {
+          if (user.rol !== 'jefe' && user.rol !== 'admin') {
             await ctx.reply(
               '❌ No tienes permisos para autorizar este servicio.',
             );
@@ -2032,7 +1980,7 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
       history.push({ role: 'user', parts: [{ text: userMessage }] });
 
       // Build the system prompt
-      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja de forma independiente.
+      const systemPrompt = `Eres ${empleada.nombreArtistico}, una mujer de la vida galante muy coqueta, provocativa y sensual que trabaja en una agencia.
 Tarifa por hora: $${empleada.precioBaseHora}/hr.
 Descripción: ${empleada.descripcion || 'Una persona hermosa y carismática'}.
 

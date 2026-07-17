@@ -45,32 +45,32 @@ export class LoyaltyService implements OnModuleInit {
           this.tiersRepository.create({
             code: 'bronce',
             name: 'Bronce',
-            minSpend: '0.00',
-            earnRate: '0.1000',
+            minSpend: 0,
+            earnRate: 0.1,
             sortOrder: 1,
             active: true,
           }),
           this.tiersRepository.create({
             code: 'plata',
             name: 'Plata',
-            minSpend: '10000.00',
-            earnRate: '0.1000',
+            minSpend: 10000,
+            earnRate: 0.1,
             sortOrder: 2,
             active: true,
           }),
           this.tiersRepository.create({
             code: 'oro',
             name: 'Oro',
-            minSpend: '30000.00',
-            earnRate: '0.1000',
+            minSpend: 30000,
+            earnRate: 0.1,
             sortOrder: 3,
             active: true,
           }),
           this.tiersRepository.create({
             code: 'vip',
             name: 'VIP',
-            minSpend: '70000.00',
-            earnRate: '0.1000',
+            minSpend: 70000,
+            earnRate: 0.1,
             sortOrder: 4,
             active: true,
           }),
@@ -92,8 +92,8 @@ export class LoyaltyService implements OnModuleInit {
     const tier = this.tiersRepository.create({
       code: dto.code.trim().toLowerCase(),
       name: dto.name.trim(),
-      minSpend: dto.minSpend.toFixed(2),
-      earnRate: (dto.earnRate ?? 0.1).toFixed(4),
+      minSpend: dto.minSpend,
+      earnRate: dto.earnRate ?? 0.1,
       active: dto.active ?? true,
       sortOrder: dto.sortOrder ?? 0,
     });
@@ -118,8 +118,8 @@ export class LoyaltyService implements OnModuleInit {
 
     if (dto.code !== undefined) tier.code = dto.code.trim().toLowerCase();
     if (dto.name !== undefined) tier.name = dto.name.trim();
-    if (dto.minSpend !== undefined) tier.minSpend = dto.minSpend.toFixed(2);
-    if (dto.earnRate !== undefined) tier.earnRate = dto.earnRate.toFixed(4);
+    if (dto.minSpend !== undefined) tier.minSpend = dto.minSpend;
+    if (dto.earnRate !== undefined) tier.earnRate = dto.earnRate;
     if (dto.active !== undefined) tier.active = dto.active;
     if (dto.sortOrder !== undefined) tier.sortOrder = dto.sortOrder;
     tier.updatedAt = new Date();
@@ -306,13 +306,13 @@ export class LoyaltyService implements OnModuleInit {
       const amount = Number(service.totalFinal ?? 0);
       const pointsEarned = Math.max(
         0,
-        Math.floor(amount * Number(membership.tier.earnRate)),
+        Math.floor(amount * membership.tier.earnRate),
       );
-      const nextLifetimeSpend = Number(membership.lifetimeSpend) + amount;
+      const nextLifetimeSpend = membership.lifetimeSpend + amount;
 
       membership.pointsBalance += pointsEarned;
       membership.lifetimePoints += pointsEarned;
-      membership.lifetimeSpend = nextLifetimeSpend.toFixed(2);
+      membership.lifetimeSpend = nextLifetimeSpend;
 
       if (membership.assignmentType === 'automatic') {
         const nextTier = await this.findTierForSpend(
@@ -332,7 +332,7 @@ export class LoyaltyService implements OnModuleInit {
         createdByUserId: null,
         type: 'earned',
         points: pointsEarned,
-        amountBasis: amount.toFixed(2),
+        amountBasis: amount,
         description: `Puntos ganados por servicio finalizado ${service.id}`,
       });
       await manager.save(LoyaltyTransaction, transaction);
@@ -370,7 +370,7 @@ export class LoyaltyService implements OnModuleInit {
       assignmentType: 'automatic',
       pointsBalance: 0,
       lifetimePoints: 0,
-      lifetimeSpend: '0.00',
+      lifetimeSpend: 0,
       assignedByUserId: null,
       assignedAt: null,
       assignmentNotes: null,

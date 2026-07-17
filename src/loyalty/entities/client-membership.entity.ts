@@ -7,6 +7,7 @@ import {
   ManyToOne,
   OneToOne,
 } from 'typeorm';
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
 import { Clientes } from '../../clients/entities/client.entity';
 import { Usuarios } from '../../users/entities/user.entity';
 import { LoyaltyTier } from './loyalty-tier.entity';
@@ -77,9 +78,10 @@ export class ClientMembership {
     precision: 12,
     scale: 2,
     default: () => '0',
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiProperty({ description: 'Lifetime Spend', example: 'Ejemplo' })
-  lifetimeSpend: string;
+  @ApiProperty({ description: 'Lifetime Spend', example: 0 })
+  lifetimeSpend: number;
 
   @Column('uuid', { name: 'assigned_by_user_id', nullable: true })
   @ApiPropertyOptional({

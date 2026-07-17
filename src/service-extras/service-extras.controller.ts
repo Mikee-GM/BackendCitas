@@ -31,28 +31,46 @@ export class ServiceExtrasController {
   constructor(private readonly serviceExtrasService: ServiceExtrasService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'service-extras', entity: ExtrasServicio, createDto: CreateServiceExtraDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'service-extras',
+    entity: ExtrasServicio,
+    createDto: CreateServiceExtraDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe', 'empleada')
   create(@Body() createServiceExtraDto: CreateServiceExtraDto) {
     return this.serviceExtrasService.create(createServiceExtraDto);
   }
 
   @Get()
-  @ApiFindAllDocs({ tag: 'service-extras', entity: ExtrasServicio, protected: true })
+  @ApiFindAllDocs({
+    tag: 'service-extras',
+    entity: ExtrasServicio,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   findAll() {
     return this.serviceExtrasService.findAll();
   }
 
   @Get(':id')
-  @ApiFindOneDocs({ tag: 'service-extras', entity: ExtrasServicio, protected: true })
+  @ApiFindOneDocs({
+    tag: 'service-extras',
+    entity: ExtrasServicio,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   findOne(@Param('id') id: string) {
     return this.serviceExtrasService.findOne(+id);
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'service-extras', entity: ExtrasServicio, updateDto: UpdateServiceExtraDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'service-extras',
+    entity: ExtrasServicio,
+    updateDto: UpdateServiceExtraDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   update(
     @Param('id') id: string,

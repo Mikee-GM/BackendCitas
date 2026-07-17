@@ -11,30 +11,50 @@ import {
 } from 'class-validator';
 
 export class CreateLoyaltyTierDto {
-  @ApiProperty({ description: 'Codigo unico del nivel de lealtad', example: 'gold', maxLength: 50 })
+  @ApiProperty({
+    description: 'Codigo unico del nivel de lealtad',
+    example: 'gold',
+    maxLength: 50,
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(50)
   readonly code: string;
 
-  @ApiProperty({ description: 'Nombre visible del nivel', example: 'Gold', maxLength: 120 })
+  @ApiProperty({
+    description: 'Nombre visible del nivel',
+    example: 'Gold',
+    maxLength: 120,
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
   readonly name: string;
 
-  @ApiProperty({ description: 'Gasto minimo para alcanzar el nivel', example: 5000, minimum: 0 })
+  @ApiProperty({
+    description: 'Gasto minimo para alcanzar el nivel',
+    example: 5000,
+    minimum: 0,
+  })
   @IsNumber()
   @Min(0)
   readonly minSpend: number;
 
-  @ApiPropertyOptional({ description: 'Tasa de acumulacion de puntos', example: 1.5, minimum: 0 })
+  @ApiPropertyOptional({
+    description: 'Tasa de acumulacion de puntos',
+    example: 1.5,
+    minimum: 0,
+  })
   @IsNumber()
   @Min(0)
   @IsOptional()
   readonly earnRate?: number;
 
-  @ApiPropertyOptional({ description: 'Indica si el nivel esta activo', example: true, default: true })
+  @ApiPropertyOptional({
+    description: 'Indica si el nivel esta activo',
+    example: true,
+    default: true,
+  })
   @IsBoolean()
   @IsOptional()
   readonly active?: boolean;

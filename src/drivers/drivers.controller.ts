@@ -32,7 +32,12 @@ export class DriversController {
   constructor(private readonly driversService: DriversService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'drivers', entity: Choferes, createDto: CreateDriverDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'drivers',
+    entity: Choferes,
+    createDto: CreateDriverDto,
+    protected: true,
+  })
   create(@Body() createDriverDto: CreateDriverDto) {
     return this.driversService.create(createDriverDto);
   }
@@ -50,7 +55,12 @@ export class DriversController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'drivers', entity: Choferes, updateDto: UpdateDriverDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'drivers',
+    entity: Choferes,
+    updateDto: UpdateDriverDto,
+    protected: true,
+  })
   update(@Param('id') id: string, @Body() updateDriverDto: UpdateDriverDto) {
     return this.driversService.update(id, updateDriverDto);
   }

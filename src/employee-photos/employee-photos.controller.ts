@@ -31,28 +31,46 @@ export class EmployeePhotosController {
   constructor(private readonly employeePhotosService: EmployeePhotosService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'employee-photos', entity: EmpleadaFotos, createDto: CreateEmployeePhotoDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'employee-photos',
+    entity: EmpleadaFotos,
+    createDto: CreateEmployeePhotoDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   create(@Body() createEmployeePhotoDto: CreateEmployeePhotoDto) {
     return this.employeePhotosService.create(createEmployeePhotoDto);
   }
 
   @Get()
-  @ApiFindAllDocs({ tag: 'employee-photos', entity: EmpleadaFotos, protected: true })
+  @ApiFindAllDocs({
+    tag: 'employee-photos',
+    entity: EmpleadaFotos,
+    protected: true,
+  })
   @Roles('admin', 'jefe', 'empleada')
   findAll() {
     return this.employeePhotosService.findAll();
   }
 
   @Get(':id')
-  @ApiFindOneDocs({ tag: 'employee-photos', entity: EmpleadaFotos, protected: true })
+  @ApiFindOneDocs({
+    tag: 'employee-photos',
+    entity: EmpleadaFotos,
+    protected: true,
+  })
   @Roles('admin', 'jefe', 'empleada')
   findOne(@Param('id') id: string) {
     return this.employeePhotosService.findOne(id);
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'employee-photos', entity: EmpleadaFotos, updateDto: UpdateEmployeePhotoDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'employee-photos',
+    entity: EmpleadaFotos,
+    updateDto: UpdateEmployeePhotoDto,
+    protected: true,
+  })
   @Roles('admin', 'jefe')
   update(
     @Param('id') id: string,

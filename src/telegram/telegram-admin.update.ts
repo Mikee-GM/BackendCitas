@@ -52,12 +52,7 @@ export class TelegramAdminUpdate {
       return;
     }
 
-    const isIndependentEmployee =
-      servicio.empleada &&
-      servicio.empleada.tipo === 'independiente' &&
-      servicio.empleada.usuarioId === user.id;
-
-    if (user.rol !== 'jefe' && user.rol !== 'admin' && !isIndependentEmployee) {
+    if (user.rol !== 'jefe' && user.rol !== 'admin') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para autorizar este servicio.',
         { show_alert: true },
@@ -123,12 +118,7 @@ export class TelegramAdminUpdate {
       return;
     }
 
-    const isIndependentEmployee =
-      servicio.empleada &&
-      servicio.empleada.tipo === 'independiente' &&
-      servicio.empleada.usuarioId === user.id;
-
-    if (user.rol !== 'jefe' && user.rol !== 'admin' && !isIndependentEmployee) {
+    if (user.rol !== 'jefe' && user.rol !== 'admin') {
       await ctx.answerCbQuery(
         '❌ No tienes permisos para autorizar este servicio.',
         { show_alert: true },

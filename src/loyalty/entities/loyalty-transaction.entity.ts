@@ -3,6 +3,7 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { Clientes } from '../../clients/entities/client.entity';
 import { Servicios } from '../../services/entities/service.entity';
 import { Usuarios } from '../../users/entities/user.entity';
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
 
 @Index('idx_loyalty_transactions_cliente', ['clienteId'])
 @Index('idx_loyalty_transactions_servicio', ['servicioId'])
@@ -64,9 +65,10 @@ export class LoyaltyTransaction {
     precision: 12,
     scale: 2,
     nullable: true,
+    transformer: new ColumnNumericTransformer(),
   })
-  @ApiPropertyOptional({ description: 'Amount Basis', example: '1200.00' })
-  amountBasis: string | null;
+  @ApiPropertyOptional({ description: 'Amount Basis', example: 1200.0 })
+  amountBasis: number | null;
 
   @Column('text', { name: 'description', nullable: true })
   @ApiPropertyOptional({ description: 'Description', example: 'Ejemplo' })

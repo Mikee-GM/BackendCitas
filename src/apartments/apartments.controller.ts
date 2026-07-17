@@ -26,7 +26,12 @@ export class ApartmentsController {
   constructor(private readonly apartmentsService: ApartmentsService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'apartments', entity: Apartments, createDto: CreateApartmentDto, protected: false })
+  @ApiCreateDocs({
+    tag: 'apartments',
+    entity: Apartments,
+    createDto: CreateApartmentDto,
+    protected: false,
+  })
   create(@Body() createApartmentDto: CreateApartmentDto) {
     return this.apartmentsService.create(createApartmentDto);
   }
@@ -44,7 +49,12 @@ export class ApartmentsController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'apartments', entity: Apartments, updateDto: UpdateApartmentDto, protected: false })
+  @ApiUpdateDocs({
+    tag: 'apartments',
+    entity: Apartments,
+    updateDto: UpdateApartmentDto,
+    protected: false,
+  })
   update(
     @Param('id') id: string,
     @Body() updateApartmentDto: UpdateApartmentDto,

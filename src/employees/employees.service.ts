@@ -41,7 +41,6 @@ export class EmployeesService {
       ubicacionLat,
       ubicacionLng,
       fotosExtra,
-      tipo,
       jefeId,
       linkX,
       contactLabel,
@@ -93,12 +92,11 @@ export class EmployeesService {
         descripcion: descripcion || null,
         linkX: linkX || null,
         contactLabel: contactLabel || null,
-        precioBaseHora: precioBaseHora.toString(),
+        precioBaseHora: Number(precioBaseHora),
         disponible: disponible ?? false,
         catalogoActivo: catalogoActivo ?? true,
-        ubicacionLat: ubicacionLat || null,
-        ubicacionLng: ubicacionLng || null,
-        tipo,
+        ubicacionLat: ubicacionLat ? Number(ubicacionLat) : null,
+        ubicacionLng: ubicacionLng ? Number(ubicacionLng) : null,
         jefeId: jefeId || null,
       });
       const empleadaGuardada = await manager.save(Empleadas, nuevaEmpleada);
@@ -124,7 +122,7 @@ export class EmployeesService {
           const nuevoExtra = manager.create(ExtrasCatalogo, {
             empleadaId: empleadaGuardada.id,
             nombre: ext.nombre,
-            precio: ext.precio.toString(),
+            precio: Number(ext.precio),
             activo: true,
           });
           const extraGuardado = await manager.save(ExtrasCatalogo, nuevoExtra);
@@ -199,14 +197,23 @@ export class EmployeesService {
 
     await this.dataSource.transaction(async (manager) => {
       // 1. Actualizar campos del perfil principal
-      if (Object.keys(camposAActualizar).length > 0) {
-        const updateData: any = { ...camposAActualizar };
-        if (camposAActualizar.precioBaseHora !== undefined) {
-          updateData.precioBaseHora =
-            camposAActualizar.precioBaseHora.toString();
-        }
-        await manager.update(Empleadas, id, updateData);
+      const updateData: any = { ...camposAActualizar };
+      if (camposAActualizar.precioBaseHora !== undefined) {
+        updateData.precioBaseHora = Number(camposAActualizar.precioBaseHora);
       }
+      if (camposAActualizar.ubicacionLat !== undefined) {
+        updateData.ubicacionLat =
+          camposAActualizar.ubicacionLat !== null
+            ? Number(camposAActualizar.ubicacionLat)
+            : null;
+      }
+      if (camposAActualizar.ubicacionLng !== undefined) {
+        updateData.ubicacionLng =
+          camposAActualizar.ubicacionLng !== null
+            ? Number(camposAActualizar.ubicacionLng)
+            : null;
+      }
+      await manager.update(Empleadas, id, updateData);
 
       // 2. Actualizar fotos extras si se especifican
       if (fotosExtra !== undefined) {
@@ -262,14 +269,14 @@ export class EmployeesService {
 
           if (matched) {
             await manager.update(ExtrasCatalogo, matched.id, {
-              precio: ext.precio.toString(),
+              precio: Number(ext.precio),
               activo: true,
             });
           } else {
             const nuevoExtra = manager.create(ExtrasCatalogo, {
               empleadaId: id,
               nombre: ext.nombre,
-              precio: ext.precio.toString(),
+              precio: Number(ext.precio),
               activo: true,
             });
             await manager.save(ExtrasCatalogo, nuevoExtra);

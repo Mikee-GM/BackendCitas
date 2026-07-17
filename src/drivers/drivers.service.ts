@@ -68,8 +68,8 @@ export class DriversService {
         nombre,
         telefono,
         disponible: disponible ?? false,
-        ubicacionLat,
-        ubicacionLng,
+        ubicacionLat: ubicacionLat ? Number(ubicacionLat) : null,
+        ubicacionLng: ubicacionLng ? Number(ubicacionLng) : null,
         vehiculoMarca: vehiculoMarca || null,
         vehiculoModelo: vehiculoModelo || null,
         vehiculoColor: vehiculoColor || null,
@@ -116,7 +116,21 @@ export class DriversService {
     await this.findOne(id);
 
     // Actualizar campos
-    await this.choferesRepository.update(id, updateDriverDto);
+    const updateData: any = { ...updateDriverDto };
+    if (updateDriverDto.ubicacionLat !== undefined) {
+      updateData.ubicacionLat =
+        updateDriverDto.ubicacionLat !== null
+          ? Number(updateDriverDto.ubicacionLat)
+          : null;
+    }
+    if (updateDriverDto.ubicacionLng !== undefined) {
+      updateData.ubicacionLng =
+        updateDriverDto.ubicacionLng !== null
+          ? Number(updateDriverDto.ubicacionLng)
+          : null;
+    }
+
+    await this.choferesRepository.update(id, updateData);
 
     return await this.findOne(id);
   }

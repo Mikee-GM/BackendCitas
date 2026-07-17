@@ -37,7 +37,9 @@ const idParam = (description = 'Identificador del recurso', name = 'id') =>
 const authResponses = (protectedRoute = false) =>
   protectedRoute
     ? [
-        ApiUnauthorizedResponse({ description: 'Token JWT inválido o ausente' }),
+        ApiUnauthorizedResponse({
+          description: 'Token JWT inválido o ausente',
+        }),
         ApiForbiddenResponse({ description: 'El usuario no tiene permisos' }),
       ]
     : [];
@@ -60,7 +62,10 @@ export const ApiCreateDocs = ({
   applyDecorators(
     ApiOperation({ summary: `Crear ${tag}` }),
     ...(createDto ? [ApiBody({ type: createDto })] : []),
-    ApiCreatedResponse({ description: `${tag} creado correctamente`, type: entity }),
+    ApiCreatedResponse({
+      description: `${tag} creado correctamente`,
+      type: entity,
+    }),
     ApiBadRequestResponse({ description: 'Datos de entrada inválidos' }),
     ...authResponses(protectedRoute),
   );
@@ -125,7 +130,10 @@ export const ApiUpdateDocs = ({
     ApiOperation({ summary: `Actualizar ${tag}` }),
     idParam(idDescription, idName),
     ...(updateDto ? [ApiBody({ type: updateDto })] : []),
-    ApiOkResponse({ description: `${tag} actualizado correctamente`, type: entity }),
+    ApiOkResponse({
+      description: `${tag} actualizado correctamente`,
+      type: entity,
+    }),
     ApiBadRequestResponse({ description: 'Datos de entrada inválidos' }),
     ApiNotFoundResponse({ description: `${tag} no encontrado` }),
     ...authResponses(protectedRoute),
@@ -151,7 +159,8 @@ export const ApiLoginDocs = (bodyDto: ApiType): MethodDecorator =>
     ApiOperation({ summary: 'Iniciar sesion' }),
     ApiBody({ type: bodyDto }),
     ApiOkResponse({
-      description: 'Credenciales validas. Devuelve token JWT y datos del usuario.',
+      description:
+        'Credenciales validas. Devuelve token JWT y datos del usuario.',
       schema: {
         example: {
           access_token: 'jwt.token.value',

@@ -59,9 +59,7 @@ export class ServicesService implements OnModuleInit {
           where: { id: createServiceDto.empleadaId },
         });
         if (emp) {
-          if (emp.tipo === 'independiente') {
-            createServiceDto.jefeId = emp.usuarioId;
-          } else if (emp.jefeId) {
+          if (emp.jefeId) {
             createServiceDto.jefeId = emp.jefeId;
           }
         }
@@ -158,21 +156,14 @@ export class ServicesService implements OnModuleInit {
       );
     }
 
-    // Validar que el usuario sea jefe, admin o la propia empleada independiente
+    // Validar que el usuario sea jefe o admin
     const user = await this.serviciosRepository.manager
       .getRepository(Usuarios)
       .findOne({
         where: { id: jefeId },
       });
-    const isIndependentEmployee =
-      servicio.empleada &&
-      servicio.empleada.tipo === 'independiente' &&
-      servicio.empleada.usuarioId === jefeId;
 
-    if (
-      !user ||
-      (user.rol !== 'jefe' && user.rol !== 'admin' && !isIndependentEmployee)
-    ) {
+    if (!user || (user.rol !== 'jefe' && user.rol !== 'admin')) {
       throw new ConflictException(
         'No tienes permisos para autorizar este servicio',
       );
@@ -199,7 +190,7 @@ export class ServicesService implements OnModuleInit {
       choferId: null,
       tipo: 'ida',
       zona: 'domicilio',
-      tarifa: '50.00', // Tarifa por defecto
+      tarifa: 50.0, // Tarifa por defecto
       estado: 'notificado',
     });
     const viajeGuardado = await this.viajesRepository.save(nuevoViaje);
@@ -224,14 +215,8 @@ export class ServicesService implements OnModuleInit {
       empUser.telegramChatId !== '111111111'
     ) {
       try {
-        const isIndependent = servicio.empleada?.tipo === 'independiente';
-        const targetChatId = isIndependent
-          ? empUser.grupoTelegramId
-          : empUser.telegramChatId;
-        const threadId =
-          isIndependent && servicio.telegramThreadId
-            ? parseInt(servicio.telegramThreadId, 10)
-            : undefined;
+        const targetChatId = empUser.telegramChatId;
+        const threadId = undefined;
 
         if (targetChatId) {
           const inlineButtons: any[] = [
@@ -320,21 +305,14 @@ export class ServicesService implements OnModuleInit {
       );
     }
 
-    // Validar que el usuario sea jefe, admin o la propia empleada independiente
+    // Validar que el usuario sea jefe o admin
     const user = await this.serviciosRepository.manager
       .getRepository(Usuarios)
       .findOne({
         where: { id: jefeId },
       });
-    const isIndependentEmployee =
-      servicio.empleada &&
-      servicio.empleada.tipo === 'independiente' &&
-      servicio.empleada.usuarioId === jefeId;
 
-    if (
-      !user ||
-      (user.rol !== 'jefe' && user.rol !== 'admin' && !isIndependentEmployee)
-    ) {
+    if (!user || (user.rol !== 'jefe' && user.rol !== 'admin')) {
       throw new ConflictException(
         'No tienes permisos para autorizar este servicio',
       );
@@ -480,14 +458,8 @@ export class ServicesService implements OnModuleInit {
         await this.serviciosRepository.save(service);
 
         try {
-          const isIndependent = service.empleada?.tipo === 'independiente';
-          const targetChatId = isIndependent
-            ? service.empleada.usuario.grupoTelegramId
-            : service.empleada.usuario.telegramChatId;
-          const threadId =
-            isIndependent && service.telegramThreadId
-              ? parseInt(service.telegramThreadId, 10)
-              : undefined;
+          const targetChatId = service.empleada.usuario.telegramChatId;
+          const threadId = undefined;
 
           if (targetChatId) {
             await this.bot.telegram.sendMessage(
@@ -569,8 +541,8 @@ export class ServicesService implements OnModuleInit {
         );
         return;
       }
-      searchLat = parseFloat(viaje.servicio.empleada.ubicacionLat);
-      searchLng = parseFloat(viaje.servicio.empleada.ubicacionLng);
+      searchLat = viaje.servicio.empleada.ubicacionLat;
+      searchLng = viaje.servicio.empleada.ubicacionLng;
     } else {
       if (
         !viaje.servicio?.ubicacionClienteLat ||
@@ -581,8 +553,8 @@ export class ServicesService implements OnModuleInit {
         );
         return;
       }
-      searchLat = parseFloat(viaje.servicio.ubicacionClienteLat);
-      searchLng = parseFloat(viaje.servicio.ubicacionClienteLng);
+      searchLat = viaje.servicio.ubicacionClienteLat;
+      searchLng = viaje.servicio.ubicacionClienteLng;
     }
 
     // Obtener lista de IDs de choferes ya notificados en este viaje
@@ -893,14 +865,8 @@ export class ServicesService implements OnModuleInit {
 
     const empUser = servicio.empleada?.usuario;
     if (empUser) {
-      const isIndependent = servicio.empleada?.tipo === 'independiente';
-      const targetChatId = isIndependent
-        ? empUser.grupoTelegramId
-        : empUser.telegramChatId;
-      const threadId =
-        isIndependent && servicio.telegramThreadId
-          ? parseInt(servicio.telegramThreadId, 10)
-          : undefined;
+      const targetChatId = empUser.telegramChatId;
+      const threadId = undefined;
 
       if (targetChatId) {
         try {

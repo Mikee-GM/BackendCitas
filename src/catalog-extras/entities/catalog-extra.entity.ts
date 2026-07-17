@@ -9,11 +9,10 @@ import {
 } from 'typeorm';
 import { Empleadas } from '../../employees/entities/employee.entity';
 import { ExtrasServicio } from '../../service-extras/entities/service-extra.entity';
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
 
 @Index('idx_extras_catalogo_empleada', ['empleadaId'], {})
-@Index('extras_catalogo_empleada_id_nombre_key', ['empleadaId', 'nombre'], {
-  unique: true,
-})
+@Index('idx_extras_catalogo_empleada_activo', ['empleadaId', 'activo'], {})
 @Index('extras_catalogo_pkey', ['id'], { unique: true })
 @Entity('extras_catalogo', { schema: 'public' })
 export class ExtrasCatalogo {
@@ -39,9 +38,14 @@ export class ExtrasCatalogo {
   @ApiProperty({ description: 'Nombre', example: 'Ejemplo' })
   nombre: string;
 
-  @Column('numeric', { name: 'precio', precision: 10, scale: 2 })
-  @ApiProperty({ description: 'Precio', example: '1200.00' })
-  precio: string;
+  @Column('numeric', {
+    name: 'precio',
+    precision: 10,
+    scale: 2,
+    transformer: new ColumnNumericTransformer(),
+  })
+  @ApiProperty({ description: 'Precio', example: 1200.00 })
+  precio: number;
 
   @Column('boolean', { name: 'activo', default: () => 'true' })
   @ApiProperty({ description: 'Activo', example: true })

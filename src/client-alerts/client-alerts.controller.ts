@@ -32,25 +32,43 @@ export class ClientAlertsController {
   constructor(private readonly clientAlertsService: ClientAlertsService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'client-alerts', entity: AlertasClientes, createDto: CreateClientAlertDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'client-alerts',
+    entity: AlertasClientes,
+    createDto: CreateClientAlertDto,
+    protected: true,
+  })
   create(@Body() createClientAlertDto: CreateClientAlertDto) {
     return this.clientAlertsService.create(createClientAlertDto);
   }
 
   @Get()
-  @ApiFindAllDocs({ tag: 'client-alerts', entity: AlertasClientes, protected: true })
+  @ApiFindAllDocs({
+    tag: 'client-alerts',
+    entity: AlertasClientes,
+    protected: true,
+  })
   findAll() {
     return this.clientAlertsService.findAll();
   }
 
   @Get(':id')
-  @ApiFindOneDocs({ tag: 'client-alerts', entity: AlertasClientes, protected: true })
+  @ApiFindOneDocs({
+    tag: 'client-alerts',
+    entity: AlertasClientes,
+    protected: true,
+  })
   findOne(@Param('id') id: string) {
     return this.clientAlertsService.findOne(+id);
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'client-alerts', entity: AlertasClientes, updateDto: UpdateClientAlertDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'client-alerts',
+    entity: AlertasClientes,
+    updateDto: UpdateClientAlertDto,
+    protected: true,
+  })
   update(
     @Param('id') id: string,
     @Body() updateClientAlertDto: UpdateClientAlertDto,

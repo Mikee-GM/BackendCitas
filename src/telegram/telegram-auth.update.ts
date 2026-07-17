@@ -105,7 +105,7 @@ export class TelegramAuthUpdate {
         '/contactar - Iniciar interacción con el bot\n' +
         '/vincular <código> - Vincular cuenta de empleado o chofer\n' +
         '/desvincular - Desvincular tu cuenta de empleado o chofer\n' +
-        '/vincular_grupo - Vincular el grupo de Telegram actual a tu cuenta (Jefes, Admins y Empleadas Independientes)\n' +
+        '/vincular_grupo - Vincular el grupo de Telegram actual a tu cuenta (Jefes y Admins)\n' +
         '/help - Ver los comandos de ayuda',
     );
   }
@@ -243,20 +243,12 @@ export class TelegramAuthUpdate {
       return;
     }
 
-    // Permitir jefe, admin o empleada (si es independiente)
-    let isAllowed = user.rol === 'jefe' || user.rol === 'admin';
-    if (user.rol === 'empleada') {
-      const emp = await this.empleadasRepository.findOne({
-        where: { usuarioId: user.id },
-      });
-      if (emp && emp.tipo === 'independiente') {
-        isAllowed = true;
-      }
-    }
+    // Permitir jefe o admin
+    const isAllowed = user.rol === 'jefe' || user.rol === 'admin';
 
     if (!isAllowed) {
       await ctx.reply(
-        '❌ Solo los Jefes, Administradores o Empleadas Independientes pueden vincular grupos.',
+        '❌ Solo los Jefes o Administradores pueden vincular grupos.',
       );
       return;
     }

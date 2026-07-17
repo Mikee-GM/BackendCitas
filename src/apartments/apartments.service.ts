@@ -17,12 +17,16 @@ export class ApartmentsService {
       nombre: createApartmentDto.nombre,
       direccion: createApartmentDto.direccion,
       descripcion: createApartmentDto.descripcion,
-      ubicacionLat: createApartmentDto.ubicacionLat
-        ? String(createApartmentDto.ubicacionLat)
-        : null,
-      ubicacionLng: createApartmentDto.ubicacionLng
-        ? String(createApartmentDto.ubicacionLng)
-        : null,
+      ubicacionLat:
+        createApartmentDto.ubicacionLat !== undefined &&
+        createApartmentDto.ubicacionLat !== null
+          ? Number(createApartmentDto.ubicacionLat)
+          : null,
+      ubicacionLng:
+        createApartmentDto.ubicacionLng !== undefined &&
+        createApartmentDto.ubicacionLng !== null
+          ? Number(createApartmentDto.ubicacionLng)
+          : null,
     });
     return this.apartmentsRepository.save(apartment);
   }
@@ -54,13 +58,13 @@ export class ApartmentsService {
     if (updateApartmentDto.ubicacionLat !== undefined) {
       apartment.ubicacionLat =
         updateApartmentDto.ubicacionLat !== null
-          ? String(updateApartmentDto.ubicacionLat)
+          ? Number(updateApartmentDto.ubicacionLat)
           : null;
     }
     if (updateApartmentDto.ubicacionLng !== undefined) {
       apartment.ubicacionLng =
         updateApartmentDto.ubicacionLng !== null
-          ? String(updateApartmentDto.ubicacionLng)
+          ? Number(updateApartmentDto.ubicacionLng)
           : null;
     }
 

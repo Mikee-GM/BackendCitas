@@ -34,13 +34,22 @@ export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'services', entity: Servicios, createDto: CreateServiceDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'services',
+    entity: Servicios,
+    createDto: CreateServiceDto,
+    protected: true,
+  })
   create(@Body() createServiceDto: CreateServiceDto) {
     return this.servicesService.create(createServiceDto);
   }
 
   @Get('pendientes')
-  @ApiFindAllDocs({ tag: 'services pendientes', entity: Servicios, protected: true })
+  @ApiFindAllDocs({
+    tag: 'services pendientes',
+    entity: Servicios,
+    protected: true,
+  })
   getPending() {
     return this.servicesService.getPending();
   }
@@ -58,7 +67,12 @@ export class ServicesController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'services', entity: Servicios, updateDto: UpdateServiceDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'services',
+    entity: Servicios,
+    updateDto: UpdateServiceDto,
+    protected: true,
+  })
   update(@Param('id') id: string, @Body() updateServiceDto: UpdateServiceDto) {
     return this.servicesService.update(id, updateServiceDto);
   }

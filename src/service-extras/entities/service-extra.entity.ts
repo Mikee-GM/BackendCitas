@@ -3,6 +3,7 @@ import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { ExtrasCatalogo } from '../../catalog-extras/entities/catalog-extra.entity';
 import { Usuarios } from '../../users/entities/user.entity';
 import { Servicios } from '../../services/entities/service.entity';
+import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
 
 @Index('idx_extras_servicio_catalogo', ['extraCatalogoId'], {})
 @Index('extras_servicio_pkey', ['id'], { unique: true })
@@ -34,9 +35,14 @@ export class ExtrasServicio {
   })
   extraCatalogoId: string;
 
-  @Column('numeric', { name: 'precio_cobrado', precision: 10, scale: 2 })
-  @ApiProperty({ description: 'Precio Cobrado', example: '1200.00' })
-  precioCobrado: string;
+  @Column('numeric', {
+    name: 'precio_cobrado',
+    precision: 10,
+    scale: 2,
+    transformer: new ColumnNumericTransformer(),
+  })
+  @ApiProperty({ description: 'Precio Cobrado', example: 1200.0 })
+  precioCobrado: number;
 
   @Column('enum', {
     name: 'metodo_pago',

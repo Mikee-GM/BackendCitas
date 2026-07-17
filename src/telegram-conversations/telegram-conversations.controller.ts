@@ -34,7 +34,12 @@ export class TelegramConversationsController {
   ) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'telegram-conversations', entity: ConversacionesTelegram, createDto: CreateTelegramConversationDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'telegram-conversations',
+    entity: ConversacionesTelegram,
+    createDto: CreateTelegramConversationDto,
+    protected: true,
+  })
   create(@Body() createTelegramConversationDto: CreateTelegramConversationDto) {
     return this.telegramConversationsService.create(
       createTelegramConversationDto,
@@ -42,19 +47,32 @@ export class TelegramConversationsController {
   }
 
   @Get()
-  @ApiFindAllDocs({ tag: 'telegram-conversations', entity: ConversacionesTelegram, protected: true })
+  @ApiFindAllDocs({
+    tag: 'telegram-conversations',
+    entity: ConversacionesTelegram,
+    protected: true,
+  })
   findAll() {
     return this.telegramConversationsService.findAll();
   }
 
   @Get(':id')
-  @ApiFindOneDocs({ tag: 'telegram-conversations', entity: ConversacionesTelegram, protected: true })
+  @ApiFindOneDocs({
+    tag: 'telegram-conversations',
+    entity: ConversacionesTelegram,
+    protected: true,
+  })
   findOne(@Param('id') id: string) {
     return this.telegramConversationsService.findOne(+id);
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'telegram-conversations', entity: ConversacionesTelegram, updateDto: UpdateTelegramConversationDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'telegram-conversations',
+    entity: ConversacionesTelegram,
+    updateDto: UpdateTelegramConversationDto,
+    protected: true,
+  })
   update(
     @Param('id') id: string,
     @Body() updateTelegramConversationDto: UpdateTelegramConversationDto,

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule } from '@nestjs/throttler';
+import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TelegramModule } from './telegram/telegram.module';
@@ -31,20 +33,42 @@ import { UploadModule } from './upload/upload.module';
     LoyaltyModule,
     ConfigModule.forRoot({
       isGlobal: true,
+      validationSchema: Joi.object({
+        DATABASE_HOST: Joi.string().required(),
+        DATABASE_PORT: Joi.number().default(5432),
+        DATABASE_USER: Joi.string().required(),
+        DATABASE_PASSWORD: Joi.string().required(),
+        DATABASE_NAME: Joi.string().required(),
+        JWT_SECRET: Joi.string().required(),
+        TELEGRAM_BOT_TOKEN: Joi.string().required(),
+        PORT: Joi.number().default(4000),
+      }),
     }),
-    TypeOrmModule.forRoot({
-      type: 'postgres',
-      host: process.env.DATABASE_HOST || 'localhost',
-      port: parseInt(process.env.DATABASE_PORT || '5432', 10),
-      username: process.env.DATABASE_USER || 'postgres',
-      password: process.env.DATABASE_PASSWORD || 'postgres',
-      database: process.env.DATABASE_NAME || 'chamba_pasteles',
-      autoLoadEntities: true,
-      entities: [__dirname + '/**/*.entity.js', __dirname + '/**/*.entity.ts'],
-      synchronize: true, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
-      migrationsRun: false,
-      migrations: [__dirname + '/migrations/*{.ts,.js}'],
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        type: 'postgres',
+        host: configService.get<string>('DATABASE_HOST'),
+        port: configService.get<number>('DATABASE_PORT'),
+        username: configService.get<string>('DATABASE_USER'),
+        password: configService.get<string>('DATABASE_PASSWORD'),
+        database: configService.get<string>('DATABASE_NAME'),
+        autoLoadEntities: true,
+        entities: [
+          __dirname + '/**/*.entity.js',
+          __dirname + '/**/*.entity.ts',
+        ],
+        synchronize: false, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
+        migrationsRun: false,
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+      }),
     }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
     TelegramModule,
     UsersModule,
     DriversModule,

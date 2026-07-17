@@ -40,19 +40,33 @@ export class LoyaltyController {
   constructor(private readonly loyaltyService: LoyaltyService) {}
 
   @Get('tiers')
-  @ApiFindAllDocs({ tag: 'loyalty tiers', entity: LoyaltyTier, protected: true })
+  @ApiFindAllDocs({
+    tag: 'loyalty tiers',
+    entity: LoyaltyTier,
+    protected: true,
+  })
   listTiers() {
     return this.loyaltyService.listTiers();
   }
 
   @Post('tiers')
-  @ApiCreateDocs({ tag: 'loyalty tiers', entity: LoyaltyTier, createDto: CreateLoyaltyTierDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'loyalty tiers',
+    entity: LoyaltyTier,
+    createDto: CreateLoyaltyTierDto,
+    protected: true,
+  })
   createTier(@Body() createTierDto: CreateLoyaltyTierDto) {
     return this.loyaltyService.createTier(createTierDto);
   }
 
   @Patch('tiers/:id')
-  @ApiUpdateDocs({ tag: 'loyalty tiers', entity: LoyaltyTier, updateDto: UpdateLoyaltyTierDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'loyalty tiers',
+    entity: LoyaltyTier,
+    updateDto: UpdateLoyaltyTierDto,
+    protected: true,
+  })
   updateTier(
     @Param('id') id: string,
     @Body() updateTierDto: UpdateLoyaltyTierDto,
@@ -61,19 +75,36 @@ export class LoyaltyController {
   }
 
   @Get('clients/:clienteId/membership')
-  @ApiFindOneDocs({ tag: 'client membership', entity: ClientMembership, idName: 'clienteId', idDescription: 'ID del cliente', protected: true })
+  @ApiFindOneDocs({
+    tag: 'client membership',
+    entity: ClientMembership,
+    idName: 'clienteId',
+    idDescription: 'ID del cliente',
+    protected: true,
+  })
   getClientMembership(@Param('clienteId') clienteId: string) {
     return this.loyaltyService.getClientMembership(clienteId);
   }
 
   @Get('clients/:clienteId/transactions')
-  @ApiFindAllByParamDocs({ tag: 'client loyalty transactions', entity: LoyaltyTransaction, idName: 'clienteId', idDescription: 'ID del cliente', protected: true })
+  @ApiFindAllByParamDocs({
+    tag: 'client loyalty transactions',
+    entity: LoyaltyTransaction,
+    idName: 'clienteId',
+    idDescription: 'ID del cliente',
+    protected: true,
+  })
   listClientTransactions(@Param('clienteId') clienteId: string) {
     return this.loyaltyService.listClientTransactions(clienteId);
   }
 
   @Post('clients/:clienteId/tier')
-  @ApiActionDocs('Asignar nivel de lealtad a un cliente', true, 'ID del cliente', 'clienteId')
+  @ApiActionDocs(
+    'Asignar nivel de lealtad a un cliente',
+    true,
+    'ID del cliente',
+    'clienteId',
+  )
   setClientTier(
     @Param('clienteId') clienteId: string,
     @Body() setTierDto: SetClientTierDto,
@@ -87,13 +118,23 @@ export class LoyaltyController {
   }
 
   @Post('clients/:clienteId/recalculate-tier')
-  @ApiActionDocs('Recalcular nivel de lealtad de un cliente', true, 'ID del cliente', 'clienteId')
+  @ApiActionDocs(
+    'Recalcular nivel de lealtad de un cliente',
+    true,
+    'ID del cliente',
+    'clienteId',
+  )
   recalculateClientTier(@Param('clienteId') clienteId: string) {
     return this.loyaltyService.recalculateClientTier(clienteId);
   }
 
   @Post('clients/:clienteId/adjust-points')
-  @ApiActionDocs('Ajustar puntos de lealtad de un cliente', true, 'ID del cliente', 'clienteId')
+  @ApiActionDocs(
+    'Ajustar puntos de lealtad de un cliente',
+    true,
+    'ID del cliente',
+    'clienteId',
+  )
   adjustPoints(
     @Param('clienteId') clienteId: string,
     @Body() adjustPointsDto: AdjustPointsDto,

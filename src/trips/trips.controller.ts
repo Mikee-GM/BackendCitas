@@ -32,7 +32,12 @@ export class TripsController {
   constructor(private readonly tripsService: TripsService) {}
 
   @Post()
-  @ApiCreateDocs({ tag: 'trips', entity: Viajes, createDto: CreateTripDto, protected: true })
+  @ApiCreateDocs({
+    tag: 'trips',
+    entity: Viajes,
+    createDto: CreateTripDto,
+    protected: true,
+  })
   create(@Body() createTripDto: CreateTripDto) {
     return this.tripsService.create(createTripDto);
   }
@@ -50,7 +55,12 @@ export class TripsController {
   }
 
   @Patch(':id')
-  @ApiUpdateDocs({ tag: 'trips', entity: Viajes, updateDto: UpdateTripDto, protected: true })
+  @ApiUpdateDocs({
+    tag: 'trips',
+    entity: Viajes,
+    updateDto: UpdateTripDto,
+    protected: true,
+  })
   update(@Param('id') id: string, @Body() updateTripDto: UpdateTripDto) {
     return this.tripsService.update(+id, updateTripDto);
   }
