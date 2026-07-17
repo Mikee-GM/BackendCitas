@@ -99,6 +99,17 @@ export class Viajes {
     | 'rechazado'
     | 'cancelado';
 
+  @Column('character varying', {
+    name: 'proveedor_transporte',
+    length: 50,
+    default: () => "'interno'",
+  })
+  @ApiProperty({
+    description: 'Proveedor de transporte del viaje (interno o uber)',
+    example: 'interno',
+  })
+  proveedorTransporte: string;
+
   @Column('timestamp with time zone', {
     name: 'hora_notificacion',
     default: () => 'now()',

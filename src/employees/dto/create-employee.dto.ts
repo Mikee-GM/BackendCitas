@@ -180,6 +180,26 @@ export class CreateEmployeeDto {
   readonly jefeId?: string;
 
   @ApiPropertyOptional({
+    description: 'ID del jefe secundario asignado',
+    example: '00000000-0000-4000-8000-000000000000',
+    format: 'uuid',
+  })
+  @IsString({
+    message: 'El ID del jefe secundario debe ser una cadena de texto',
+  })
+  @IsOptional()
+  readonly jefeSecundarioId?: string;
+
+  @ApiPropertyOptional({
+    description: 'ID del apartamento/departamento asignado',
+    example: '00000000-0000-4000-8000-000000000000',
+    format: 'uuid',
+  })
+  @IsString({ message: 'El ID del apartamento debe ser una cadena de texto' })
+  @IsOptional()
+  readonly apartmentId?: string;
+
+  @ApiPropertyOptional({
     description: 'Enlace de la red social X (Twitter)',
     example: 'https://x.com/usuario',
   })

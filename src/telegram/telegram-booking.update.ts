@@ -55,6 +55,10 @@ interface BotContext extends Context {
 @Update()
 export class TelegramBookingUpdate {
   private readonly logger = new Logger(TelegramBookingUpdate.name);
+  private readonly userLocationCache = new Map<
+    string,
+    { id: string; rol: string; name: string; lastSaved: number }
+  >();
 
   constructor(
     @InjectRepository(Usuarios)
@@ -1130,12 +1134,17 @@ export class TelegramBookingUpdate {
 
   @On(['location', 'venue', 'edited_message'])
   async onLocation(@Ctx() ctx: BotContext) {
+    this.logger.log(`onLocation triggered. updateType: ${ctx.updateType}`);
     const telegramId = ctx.from?.id.toString();
+    this.logger.log(`Sender telegramId: ${telegramId}`);
     if (!telegramId) return;
 
     const message =
       ctx.message || ctx.editedMessage || (ctx.update as any).edited_message;
-    if (!message) return;
+    if (!message) {
+      this.logger.log('No message or edited_message object found in update.');
+      return;
+    }
 
     let lat: string;
     let lng: string;
@@ -1146,18 +1155,48 @@ export class TelegramBookingUpdate {
       lat = venue.location.latitude.toString();
       lng = venue.location.longitude.toString();
       notasUbicacion = `Lugar seleccionado: ${venue.title}\nDirección: ${venue.address}`;
+      this.logger.log(`Parsed venue location: lat=${lat}, lng=${lng}`);
     } else if (message.location) {
       const location = message.location;
       lat = location.latitude.toString();
       lng = location.longitude.toString();
+      this.logger.log(`Parsed location coordinates: lat=${lat}, lng=${lng}`);
     } else {
-      // Ignore edited messages that don't contain a location
+      this.logger.log(
+        'Ignore edited messages/updates that do not contain location/venue.',
+      );
       return;
     }
 
     const isEdited = !!(
       ctx.editedMessage || (ctx.update as any).edited_message
     );
+    this.logger.log(`isEdited update: ${isEdited}`);
+
+    // Check in-memory cache to throttle database operations completely
+    const nowTime = Date.now();
+    const cached = this.userLocationCache.get(telegramId);
+    if (cached) {
+      const diffMs = nowTime - cached.lastSaved;
+      if (diffMs < 60000) {
+        this.logger.log(
+          `Location update for telegramId=${telegramId} (role=${cached.rol}) throttled via in-memory cache (0 database queries executed). Diff: ${diffMs}ms`,
+        );
+
+        // Broadcast SSE update immediately using cached details
+        this.realtimeEventsService.emitToJefes({
+          type:
+            cached.rol === 'chofer'
+              ? 'DRIVER_LOCATION_UPDATE'
+              : 'EMPLOYEE_LOCATION_UPDATE',
+          choferId: cached.rol === 'chofer' ? cached.id : undefined,
+          empleadaId: cached.rol === 'empleada' ? cached.id : undefined,
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+        });
+        return;
+      }
+    }
 
     // Verificar si es personal del sistema (chofer o empleada)
     const user = await this.usuariosRepository.findOne({
@@ -1166,11 +1205,33 @@ export class TelegramBookingUpdate {
     });
 
     if (user) {
+      this.logger.log(`System user found: id=${user.id}, rol=${user.rol}`);
       if (user.rol === 'chofer' && user.choferes) {
+        this.logger.log(
+          `Updating location for driver: ${user.choferes.nombre}`,
+        );
         user.choferes.ubicacionLat = parseFloat(lat);
         user.choferes.ubicacionLng = parseFloat(lng);
         user.choferes.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.choferes);
+        this.logger.log(`Driver location saved successfully.`);
+
+        // Cache user info
+        this.userLocationCache.set(telegramId, {
+          id: user.choferes.id,
+          rol: 'chofer',
+          name: user.choferes.nombre,
+          lastSaved: nowTime,
+        });
+
+        // Emit real-time event to Jefes/Dashboard
+        this.realtimeEventsService.emitToJefes({
+          type: 'DRIVER_LOCATION_UPDATE',
+          choferId: user.choferes.id,
+          lat: user.choferes.ubicacionLat,
+          lng: user.choferes.ubicacionLng,
+        });
+
         if (!isEdited) {
           await ctx.reply(
             `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}`,
@@ -1180,10 +1241,31 @@ export class TelegramBookingUpdate {
       }
 
       if (user.rol === 'empleada' && user.empleadas) {
+        this.logger.log(
+          `Updating location for employee: ${user.empleadas.nombreArtistico}`,
+        );
         user.empleadas.ubicacionLat = parseFloat(lat);
         user.empleadas.ubicacionLng = parseFloat(lng);
         user.empleadas.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.empleadas);
+        this.logger.log(`Employee location saved successfully.`);
+
+        // Cache user info
+        this.userLocationCache.set(telegramId, {
+          id: user.empleadas.id,
+          rol: 'empleada',
+          name: user.empleadas.nombreArtistico,
+          lastSaved: nowTime,
+        });
+
+        // Emit real-time event to Jefes/Dashboard
+        this.realtimeEventsService.emitToJefes({
+          type: 'EMPLOYEE_LOCATION_UPDATE',
+          empleadaId: user.empleadas.id,
+          lat: user.empleadas.ubicacionLat,
+          lng: user.empleadas.ubicacionLng,
+        });
+
         if (!isEdited) {
           await ctx.reply(
             `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}`,
@@ -1191,6 +1273,8 @@ export class TelegramBookingUpdate {
         }
         return;
       }
+    } else {
+      this.logger.log(`No system user found for telegramChatId=${telegramId}`);
     }
 
     // Si no es personal, continuar flujo de cliente
@@ -1240,17 +1324,35 @@ export class TelegramBookingUpdate {
 
     let jefe: Usuarios | null = null;
     if (empleada.jefeId) {
-      jefe = await this.usuariosRepository.findOne({
+      const mainJefe = await this.usuariosRepository.findOne({
         where: { id: empleada.jefeId, activo: true },
       });
+      if (mainJefe && mainJefe.disponible) {
+        jefe = mainJefe;
+      } else if (empleada.jefeSecundarioId) {
+        const secJefe = await this.usuariosRepository.findOne({
+          where: { id: empleada.jefeSecundarioId, activo: true },
+        });
+        if (secJefe && secJefe.disponible) {
+          jefe = secJefe;
+        }
+      }
     }
     if (!jefe) {
       jefe = await this.usuariosRepository.findOne({
         where: [
-          { rol: 'jefe', activo: true },
-          { rol: 'admin', activo: true },
+          { rol: 'jefe', activo: true, disponible: true },
+          { rol: 'admin', activo: true, disponible: true },
         ],
       });
+      if (!jefe) {
+        jefe = await this.usuariosRepository.findOne({
+          where: [
+            { rol: 'jefe', activo: true },
+            { rol: 'admin', activo: true },
+          ],
+        });
+      }
     }
 
     if (!jefe) {

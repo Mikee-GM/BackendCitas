@@ -58,6 +58,13 @@ export class Usuarios {
   @ApiProperty({ description: 'Activo', example: true })
   activo: boolean;
 
+  @Column('boolean', { name: 'disponible', default: () => 'true' })
+  @ApiProperty({
+    description: 'Disponible (para jefes/choferes)',
+    example: true,
+  })
+  disponible: boolean;
+
   @Column('bigint', { name: 'telegram_chat_id', nullable: true, unique: true })
   @ApiPropertyOptional({
     description: 'Telegram Chat Id',

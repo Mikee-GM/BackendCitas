@@ -83,7 +83,7 @@ export class Empleadas {
     scale: 2,
     transformer: new ColumnNumericTransformer(),
   })
-  @ApiProperty({ description: 'Precio Base Hora', example: 1200.00 })
+  @ApiProperty({ description: 'Precio Base Hora', example: 1200.0 })
   precioBaseHora: number;
 
   @Column('boolean', { name: 'disponible', default: () => 'false' })
@@ -194,4 +194,16 @@ export class Empleadas {
   @JoinColumn([{ name: 'jefe_id', referencedColumnName: 'id' }])
   @ApiPropertyOptional({ description: 'Jefe', type: () => Usuarios })
   jefe: Usuarios | null;
+
+  @Column('uuid', { name: 'jefe_secundario_id', nullable: true })
+  @ApiPropertyOptional({
+    description: 'Jefe Secundario Id',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
+  jefeSecundarioId: string | null;
+
+  @ManyToOne(() => Usuarios, { onDelete: 'SET NULL' })
+  @JoinColumn([{ name: 'jefe_secundario_id', referencedColumnName: 'id' }])
+  @ApiPropertyOptional({ description: 'Jefe Secundario', type: () => Usuarios })
+  jefeSecundario: Usuarios | null;
 }

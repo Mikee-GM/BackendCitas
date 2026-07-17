@@ -50,6 +50,15 @@ export class CreateUserDto {
   @IsOptional()
   readonly activo?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Indica si el usuario (jefe/chofer) está disponible',
+    example: true,
+    default: true,
+  })
+  @IsBoolean({ message: 'El estado disponible debe ser un valor booleano' })
+  @IsOptional()
+  readonly disponible?: boolean;
+
   @ApiPropertyOptional({ description: 'Nombre del usuario', example: 'Juan' })
   @IsString({ message: 'El nombre debe ser una cadena de texto' })
   @IsOptional()

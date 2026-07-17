@@ -70,21 +70,37 @@ export class TelegramAdminUpdate {
 
     const warnHeader = `⚠️ *¿Confirmas que deseas ${accept ? 'ACEPTAR' : 'RECHAZAR'} este servicio?*\n\n`;
 
+    const keyboardButtons = accept
+      ? [
+          [
+            Markup.button.callback(
+              '🚗 Sí, con Chofer',
+              `conf_ja:${serviceId}:1:chofer`,
+            ),
+            Markup.button.callback(
+              '📱 Sí, con Uber',
+              `conf_ja:${serviceId}:1:uber`,
+            ),
+          ],
+          [Markup.button.callback('❌ Cancelar', `canc_ja:${serviceId}`)],
+        ]
+      : [
+          [
+            Markup.button.callback(
+              '✅ Sí, confirmar',
+              `conf_ja:${serviceId}:0`,
+            ),
+            Markup.button.callback('❌ Cancelar', `canc_ja:${serviceId}`),
+          ],
+        ];
+
     await ctx.editMessageText(warnHeader + originalText, {
       parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback(
-            '✅ Sí, confirmar',
-            `conf_ja:${serviceId}:${accept ? 1 : 0}`,
-          ),
-          Markup.button.callback('❌ Cancelar', `canc_ja:${serviceId}`),
-        ],
-      ]),
+      ...Markup.inlineKeyboard(keyboardButtons),
     });
   }
 
-  @Action(/^conf_ja:(.+):([01])$/)
+  @Action(/^conf_ja:(.+):([01])(?::(chofer|uber))?$/)
   async onConfJefeAutorizar(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -104,6 +120,7 @@ export class TelegramAdminUpdate {
     const match = (ctx as any).match;
     const serviceId = match[1];
     const accept = match[2] === '1';
+    const transportType = match[3] || 'chofer';
 
     // Obtener información del servicio para validar si es una empleada independiente autorizándose a sí misma
     const servicio = await this.serviciosRepository.findOne({
@@ -127,8 +144,14 @@ export class TelegramAdminUpdate {
     }
 
     try {
+      let uberLink: string | undefined;
       if (accept) {
-        await this.servicesService.aceptar(serviceId, user.id);
+        const res = await this.servicesService.aceptar(
+          serviceId,
+          user.id,
+          transportType as any,
+        );
+        uberLink = res.uberLink;
         await ctx.answerCbQuery('🟢 Servicio Aceptado exitosamente.');
       } else {
         await this.servicesService.rechazar(serviceId, user.id);
@@ -146,24 +169,39 @@ export class TelegramAdminUpdate {
         '',
       );
 
-      const statusLabel = accept ? '🟢 ACEPTADO' : '🔴 RECHAZADO';
+      const statusLabel = accept
+        ? transportType === 'uber'
+          ? '🟢 ACEPTADO con Uber'
+          : '🟢 ACEPTADO con Chofer'
+        : '🔴 RECHAZADO';
 
       const options: any = { parse_mode: 'Markdown' };
-      if (accept && servicio.cliente?.telegramChatId) {
-        options.reply_markup = Markup.inlineKeyboard([
-          [
-            Markup.button.url(
-              '💬 Contactar Cliente',
-              `tg://user?id=${servicio.cliente.telegramChatId}`,
-            ),
-          ],
-        ]).reply_markup;
+      const inlineButtons: any[] = [];
+
+      if (accept && transportType === 'uber' && uberLink) {
+        inlineButtons.push([Markup.button.url('📱 Pedir Uber', uberLink)]);
       }
 
-      await ctx.editMessageText(
-        originalText + `\n\n📢 *Resolución:* ${statusLabel} por ${user.email}`,
-        options,
-      );
+      if (accept && servicio.cliente?.telegramChatId) {
+        inlineButtons.push([
+          Markup.button.url(
+            '💬 Contactar Cliente',
+            `tg://user?id=${servicio.cliente.telegramChatId}`,
+          ),
+        ]);
+      }
+
+      if (inlineButtons.length > 0) {
+        options.reply_markup =
+          Markup.inlineKeyboard(inlineButtons).reply_markup;
+      }
+
+      let resolutionMsg = `\n\n📢 *Resolución:* ${statusLabel} por ${user.email}`;
+      if (accept && transportType === 'uber' && uberLink) {
+        resolutionMsg += `\n🔗 *Enlace Uber:* [Pedir Uber](${uberLink})`;
+      }
+
+      await ctx.editMessageText(originalText + resolutionMsg, options);
     } catch (err: any) {
       console.error('Error al autorizar servicio desde Telegram:', err);
       await ctx.answerCbQuery(

@@ -12,6 +12,7 @@ import { Empleadas } from './entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class EmployeesService {
@@ -23,6 +24,7 @@ export class EmployeesService {
     @InjectRepository(EmpleadaFotos)
     private readonly empleadaFotosRepository: Repository<EmpleadaFotos>,
     private readonly dataSource: DataSource,
+    private readonly uploadService: UploadService,
   ) {}
 
   async create(createEmployeeDto: CreateEmployeeDto): Promise<Empleadas> {
@@ -42,6 +44,8 @@ export class EmployeesService {
       ubicacionLng,
       fotosExtra,
       jefeId,
+      jefeSecundarioId,
+      apartmentId,
       linkX,
       contactLabel,
       extras,
@@ -98,6 +102,8 @@ export class EmployeesService {
         ubicacionLat: ubicacionLat ? Number(ubicacionLat) : null,
         ubicacionLng: ubicacionLng ? Number(ubicacionLng) : null,
         jefeId: jefeId || null,
+        jefeSecundarioId: jefeSecundarioId || null,
+        apartmentId: apartmentId || null,
       });
       const empleadaGuardada = await manager.save(Empleadas, nuevaEmpleada);
 
@@ -147,21 +153,39 @@ export class EmployeesService {
 
   async findAll(): Promise<Empleadas[]> {
     return await this.empleadasRepository.find({
-      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
+      relations: {
+        usuario: true,
+        empleadaFotos: true,
+        extrasCatalogos: true,
+        jefe: true,
+        jefeSecundario: true,
+      },
     });
   }
 
   async findAllActive(): Promise<Empleadas[]> {
     return await this.empleadasRepository.find({
       where: { catalogoActivo: true },
-      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
+      relations: {
+        usuario: true,
+        empleadaFotos: true,
+        extrasCatalogos: true,
+        jefe: true,
+        jefeSecundario: true,
+      },
     });
   }
 
   async findOne(id: string): Promise<Empleadas> {
     const empleada = await this.empleadasRepository.findOne({
       where: { id },
-      relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
+      relations: {
+        usuario: true,
+        empleadaFotos: true,
+        extrasCatalogos: true,
+        jefe: true,
+        jefeSecundario: true,
+      },
     });
 
     if (!empleada) {
@@ -195,6 +219,38 @@ export class EmployeesService {
     // Ejecutar transacción si hay fotos extras o servicios extras a actualizar
     const { fotosExtra, extras, ...camposAActualizar } = updateEmployeeDto;
 
+    // A. Si cambia la foto de perfil, eliminar la anterior de R2
+    if (
+      camposAActualizar.fotoPerfilUrl !== undefined &&
+      camposAActualizar.fotoPerfilUrl !== empleada.fotoPerfilUrl
+    ) {
+      if (empleada.fotoPerfilUrl) {
+        try {
+          await this.uploadService.deleteFile(empleada.fotoPerfilUrl);
+        } catch (err) {
+          console.error('Error al eliminar fotoPerfilUrl antigua de R2:', err);
+        }
+      }
+    }
+
+    // B. Si se envían fotos extras, identificar cuáles fueron removidas y borrarlas de R2
+    if (fotosExtra !== undefined) {
+      const oldUrls = empleada.empleadaFotos
+        ? empleada.empleadaFotos.map((f) => f.url)
+        : [];
+      const urlsToDelete = oldUrls.filter((url) => !fotosExtra.includes(url));
+
+      for (const url of urlsToDelete) {
+        if (url) {
+          try {
+            await this.uploadService.deleteFile(url);
+          } catch (err) {
+            console.error('Error al eliminar foto extra obsoleta de R2:', err);
+          }
+        }
+      }
+    }
+
     await this.dataSource.transaction(async (manager) => {
       // 1. Actualizar campos del perfil principal
       const updateData: any = { ...camposAActualizar };
@@ -217,7 +273,7 @@ export class EmployeesService {
 
       // 2. Actualizar fotos extras si se especifican
       if (fotosExtra !== undefined) {
-        // Borrar fotos anteriores
+        // Borrar fotos anteriores de la base de datos
         await manager.delete(EmpleadaFotos, { empleadaId: id });
 
         // Insertar nuevas fotos
@@ -290,7 +346,33 @@ export class EmployeesService {
 
   async remove(id: string): Promise<{ deleted: boolean }> {
     const empleada = await this.findOne(id);
-    // Eliminar el usuario, lo cual cascada y borra el perfil y fotos
+
+    // 1. Eliminar foto principal de R2
+    if (empleada.fotoPerfilUrl) {
+      try {
+        await this.uploadService.deleteFile(empleada.fotoPerfilUrl);
+      } catch (err) {
+        console.error('Error al eliminar fotoPerfilUrl de R2 en borrado:', err);
+      }
+    }
+
+    // 2. Eliminar fotos extras de R2
+    if (empleada.empleadaFotos && empleada.empleadaFotos.length > 0) {
+      for (const foto of empleada.empleadaFotos) {
+        if (foto.url) {
+          try {
+            await this.uploadService.deleteFile(foto.url);
+          } catch (err) {
+            console.error(
+              'Error al eliminar foto extra de R2 en borrado:',
+              err,
+            );
+          }
+        }
+      }
+    }
+
+    // Eliminar el usuario, lo cual cascada y borra el perfil y fotos en la base de datos
     await this.usuariosRepository.delete(empleada.usuarioId);
     return { deleted: true };
   }

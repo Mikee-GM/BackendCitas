@@ -59,8 +59,24 @@ export class ServicesService implements OnModuleInit {
           where: { id: createServiceDto.empleadaId },
         });
         if (emp) {
+          let assignedJefeId = emp.jefeId;
           if (emp.jefeId) {
-            createServiceDto.jefeId = emp.jefeId;
+            const mainJefe = await this.usuariosRepository.findOne({
+              where: { id: emp.jefeId, activo: true },
+            });
+            if (!mainJefe || !mainJefe.disponible) {
+              if (emp.jefeSecundarioId) {
+                const secJefe = await this.usuariosRepository.findOne({
+                  where: { id: emp.jefeSecundarioId, activo: true },
+                });
+                if (secJefe && secJefe.disponible) {
+                  assignedJefeId = emp.jefeSecundarioId;
+                }
+              }
+            }
+          }
+          if (assignedJefeId) {
+            createServiceDto.jefeId = assignedJefeId;
           }
         }
       } catch (err) {
@@ -138,7 +154,11 @@ export class ServicesService implements OnModuleInit {
     return { deleted: true };
   }
 
-  async aceptar(id: string, jefeId: string): Promise<Servicios> {
+  async aceptar(
+    id: string,
+    jefeId: string,
+    tipoTransporte: 'chofer' | 'uber' = 'chofer',
+  ): Promise<Servicios & { uberLink?: string }> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id },
       relations: { cliente: true, empleada: { usuario: true } },
@@ -191,7 +211,8 @@ export class ServicesService implements OnModuleInit {
       tipo: 'ida',
       zona: 'domicilio',
       tarifa: 50.0, // Tarifa por defecto
-      estado: 'notificado',
+      estado: tipoTransporte === 'uber' ? 'aceptado' : 'notificado',
+      proveedorTransporte: tipoTransporte,
     });
     const viajeGuardado = await this.viajesRepository.save(nuevoViaje);
 
@@ -277,16 +298,32 @@ export class ServicesService implements OnModuleInit {
     }
 
     // 5. Iniciar despacho de choferes por proximidad
-    try {
-      await this.dispatchViaje(viajeGuardado.id);
-    } catch (dispatchErr) {
-      console.error(
-        'Error al iniciar despacho de choferes por proximidad:',
-        dispatchErr,
-      );
+    let uberLink: string | undefined;
+    if (tipoTransporte === 'uber') {
+      const latEmp = servicio.empleada?.ubicacionLat;
+      const lngEmp = servicio.empleada?.ubicacionLng;
+      const latCli = servicio.ubicacionClienteLat;
+      const lngCli = servicio.ubicacionClienteLng;
+
+      uberLink = `https://uber.com/ul/?action=setPickup&dropoff[latitude]=${latCli}&dropoff[longitude]=${lngCli}`;
+      if (latEmp && lngEmp) {
+        uberLink += `&pickup[latitude]=${latEmp}&pickup[longitude]=${lngEmp}`;
+      }
+    } else {
+      try {
+        await this.dispatchViaje(viajeGuardado.id);
+      } catch (dispatchErr) {
+        console.error(
+          'Error al iniciar despacho de choferes por proximidad:',
+          dispatchErr,
+        );
+      }
     }
 
-    return servicio;
+    return {
+      ...servicio,
+      uberLink,
+    } as any;
   }
 
   async rechazar(id: string, jefeId: string): Promise<Servicios> {
