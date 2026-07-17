@@ -1,4 +1,9 @@
-import { Inject, forwardRef, Logger } from '@nestjs/common';
+import {
+  Inject,
+  forwardRef,
+  Logger,
+  BeforeApplicationShutdown,
+} from '@nestjs/common';
 import { Update, Ctx, Action, On } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -8,6 +13,7 @@ import { RealtimeEventsService } from '../realtime/realtime.service';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
+import { Choferes } from '../drivers/entities/driver.entity';
 import { Servicios } from '../services/entities/service.entity';
 import { Viajes } from '../trips/entities/trip.entity';
 import { ServicesService } from '../services/services.service';
@@ -53,11 +59,19 @@ interface BotContext extends Context {
 }
 
 @Update()
-export class TelegramBookingUpdate {
+export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   private readonly logger = new Logger(TelegramBookingUpdate.name);
   private readonly userLocationCache = new Map<
     string,
-    { id: string; rol: string; name: string; lastSaved: number }
+    {
+      id: string;
+      rol: string;
+      name: string;
+      lat: number;
+      lng: number;
+      lastSaved: number;
+      dirty: boolean;
+    }
   >();
 
   constructor(
@@ -81,9 +95,91 @@ export class TelegramBookingUpdate {
     private readonly telegramService: TelegramService,
     @Inject(forwardRef(() => TelegramAuthUpdate))
     private readonly telegramAuthUpdate: TelegramAuthUpdate,
+    @Inject(forwardRef(() => LoyaltyService))
     private readonly loyaltyService: LoyaltyService,
     private readonly telegramBookingService: TelegramBookingService,
-  ) {}
+  ) {
+    // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
+    setInterval(() => {
+      const now = Date.now();
+      let cleaned = 0;
+      for (const [key, cached] of this.userLocationCache.entries()) {
+        if (now - cached.lastSaved > 3600000) {
+          this.userLocationCache.delete(key);
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) {
+        this.logger.log(
+          `Inactivity cleanup: removed ${cleaned} inactive users from location cache.`,
+        );
+      }
+    }, 300000);
+  }
+
+  // Graceful Shutdown Hook: Flush any dirty/unsaved location updates to DB
+  async beforeApplicationShutdown() {
+    this.logger.log(
+      'Graceful shutdown: flushing dirty locations to database...',
+    );
+    let flushedCount = 0;
+    for (const [telegramId, cached] of this.userLocationCache.entries()) {
+      if (cached.dirty) {
+        try {
+          if (cached.rol === 'chofer') {
+            await this.usuariosRepository.manager.update(Choferes, cached.id, {
+              ubicacionLat: cached.lat,
+              ubicacionLng: cached.lng,
+              ultimaUbicacionAt: new Date(cached.lastSaved),
+            });
+            flushedCount++;
+          } else if (cached.rol === 'empleada') {
+            await this.usuariosRepository.manager.update(Empleadas, cached.id, {
+              ubicacionLat: cached.lat,
+              ubicacionLng: cached.lng,
+              ultimaUbicacionAt: new Date(cached.lastSaved),
+            });
+            flushedCount++;
+          }
+          cached.dirty = false;
+        } catch (err) {
+          this.logger.error(
+            `Error flushing location for telegramId=${telegramId}:`,
+            err,
+          );
+        }
+      }
+    }
+    if (flushedCount > 0) {
+      this.logger.log(
+        `Gracefully flushed ${flushedCount} locations to database.`,
+      );
+    }
+  }
+
+  // Helper function to calculate distance in meters using Haversine formula
+  private getDistanceMeters(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+      Math.cos(phi1) *
+        Math.cos(phi2) *
+        Math.sin(deltaLambda / 2) *
+        Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c; // in meters
+  }
 
   async getGroqResponse(
     systemPrompt: string,
@@ -1134,17 +1230,12 @@ export class TelegramBookingUpdate {
 
   @On(['location', 'venue', 'edited_message'])
   async onLocation(@Ctx() ctx: BotContext) {
-    this.logger.log(`onLocation triggered. updateType: ${ctx.updateType}`);
     const telegramId = ctx.from?.id.toString();
-    this.logger.log(`Sender telegramId: ${telegramId}`);
     if (!telegramId) return;
 
     const message =
       ctx.message || ctx.editedMessage || (ctx.update as any).edited_message;
-    if (!message) {
-      this.logger.log('No message or edited_message object found in update.');
-      return;
-    }
+    if (!message) return;
 
     let lat: string;
     let lng: string;
@@ -1155,35 +1246,41 @@ export class TelegramBookingUpdate {
       lat = venue.location.latitude.toString();
       lng = venue.location.longitude.toString();
       notasUbicacion = `Lugar seleccionado: ${venue.title}\nDirección: ${venue.address}`;
-      this.logger.log(`Parsed venue location: lat=${lat}, lng=${lng}`);
     } else if (message.location) {
       const location = message.location;
       lat = location.latitude.toString();
       lng = location.longitude.toString();
-      this.logger.log(`Parsed location coordinates: lat=${lat}, lng=${lng}`);
     } else {
-      this.logger.log(
-        'Ignore edited messages/updates that do not contain location/venue.',
-      );
       return;
     }
 
     const isEdited = !!(
       ctx.editedMessage || (ctx.update as any).edited_message
     );
-    this.logger.log(`isEdited update: ${isEdited}`);
 
     // Check in-memory cache to throttle database operations completely
     const nowTime = Date.now();
     const cached = this.userLocationCache.get(telegramId);
+    const parsedLat = parseFloat(lat);
+    const parsedLng = parseFloat(lng);
+
     if (cached) {
       const diffMs = nowTime - cached.lastSaved;
-      if (diffMs < 60000) {
-        this.logger.log(
-          `Location update for telegramId=${telegramId} (role=${cached.rol}) throttled via in-memory cache (0 database queries executed). Diff: ${diffMs}ms`,
-        );
+      const distanceMeters = this.getDistanceMeters(
+        cached.lat,
+        cached.lng,
+        parsedLat,
+        parsedLng,
+      );
 
-        // Broadcast SSE update immediately using cached details
+      // Throttling: Skip database read/write if within 60s AND has moved less than 50 meters
+      if (diffMs < 60000 && distanceMeters < 50) {
+        // Update ONLY in-memory coordinates in cache
+        cached.lat = parsedLat;
+        cached.lng = parsedLng;
+        cached.dirty = true; // Mark as dirty since cache is ahead of DB
+
+        // Broadcast SSE update immediately using cached/updated details
         this.realtimeEventsService.emitToJefes({
           type:
             cached.rol === 'chofer'
@@ -1191,8 +1288,8 @@ export class TelegramBookingUpdate {
               : 'EMPLOYEE_LOCATION_UPDATE',
           choferId: cached.rol === 'chofer' ? cached.id : undefined,
           empleadaId: cached.rol === 'empleada' ? cached.id : undefined,
-          lat: parseFloat(lat),
-          lng: parseFloat(lng),
+          lat: parsedLat,
+          lng: parsedLng,
         });
         return;
       }
@@ -1205,23 +1302,21 @@ export class TelegramBookingUpdate {
     });
 
     if (user) {
-      this.logger.log(`System user found: id=${user.id}, rol=${user.rol}`);
       if (user.rol === 'chofer' && user.choferes) {
-        this.logger.log(
-          `Updating location for driver: ${user.choferes.nombre}`,
-        );
-        user.choferes.ubicacionLat = parseFloat(lat);
-        user.choferes.ubicacionLng = parseFloat(lng);
+        user.choferes.ubicacionLat = parsedLat;
+        user.choferes.ubicacionLng = parsedLng;
         user.choferes.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.choferes);
-        this.logger.log(`Driver location saved successfully.`);
 
         // Cache user info
         this.userLocationCache.set(telegramId, {
           id: user.choferes.id,
           rol: 'chofer',
           name: user.choferes.nombre,
+          lat: parsedLat,
+          lng: parsedLng,
           lastSaved: nowTime,
+          dirty: false,
         });
 
         // Emit real-time event to Jefes/Dashboard
@@ -1241,21 +1336,20 @@ export class TelegramBookingUpdate {
       }
 
       if (user.rol === 'empleada' && user.empleadas) {
-        this.logger.log(
-          `Updating location for employee: ${user.empleadas.nombreArtistico}`,
-        );
-        user.empleadas.ubicacionLat = parseFloat(lat);
-        user.empleadas.ubicacionLng = parseFloat(lng);
+        user.empleadas.ubicacionLat = parsedLat;
+        user.empleadas.ubicacionLng = parsedLng;
         user.empleadas.ultimaUbicacionAt = new Date();
         await this.usuariosRepository.manager.save(user.empleadas);
-        this.logger.log(`Employee location saved successfully.`);
 
         // Cache user info
         this.userLocationCache.set(telegramId, {
           id: user.empleadas.id,
           rol: 'empleada',
           name: user.empleadas.nombreArtistico,
+          lat: parsedLat,
+          lng: parsedLng,
           lastSaved: nowTime,
+          dirty: false,
         });
 
         // Emit real-time event to Jefes/Dashboard
