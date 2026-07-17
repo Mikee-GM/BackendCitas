@@ -18,6 +18,7 @@ import { AuthModule } from '../auth/auth.module';
 import { ServicesModule } from '../services/services.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { TelegramSession } from './entities/telegram-session.entity';
+import { AiModule } from '../ai/ai.module';
 
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
@@ -35,6 +36,7 @@ import { ExtrasServicio } from '../service-extras/entities/service-extra.entity'
     ]),
     AuthModule,
     LoyaltyModule,
+    AiModule,
     forwardRef(() => ServicesModule),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule, TypeOrmModule.forFeature([TelegramSession])],

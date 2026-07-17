@@ -7,6 +7,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TelegramModule } from './telegram/telegram.module';
 import { UsersModule } from './users/users.module';
+import { AiModule } from './ai/ai.module';
 import { DriversModule } from './drivers/drivers.module';
 import { ClientsModule } from './clients/clients.module';
 import { EmployeesModule } from './employees/employees.module';
@@ -27,6 +28,7 @@ import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
+    AiModule,
     UploadModule,
     AuthModule,
     RealtimeModule,
@@ -59,7 +61,7 @@ import { UploadModule } from './upload/upload.module';
           __dirname + '/**/*.entity.ts',
         ],
         synchronize: false, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
-        migrationsRun: false,
+        migrationsRun: true,
         migrations: [__dirname + '/migrations/*{.ts,.js}'],
       }),
     }),
