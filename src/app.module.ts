@@ -44,6 +44,7 @@ import { UploadModule } from './upload/upload.module';
         JWT_SECRET: Joi.string().required(),
         TELEGRAM_BOT_TOKEN: Joi.string().required(),
         PORT: Joi.number().default(4000),
+        MAX_DAILY_AI_CALLS: Joi.number().default(15),
       }),
     }),
     TypeOrmModule.forRootAsync({

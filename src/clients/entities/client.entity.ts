@@ -28,6 +28,21 @@ export class Clientes {
   })
   telegramChatId: string;
 
+  @Column('integer', { name: 'ai_calls_today', default: 0 })
+  @ApiProperty({ description: 'AI calls made today', example: 0 })
+  aiCallsToday: number;
+
+  @Column('timestamp with time zone', {
+    name: 'last_ai_call_at',
+    nullable: true,
+  })
+  @ApiPropertyOptional({
+    description: 'Last time AI was called',
+    type: String,
+    format: 'date-time',
+  })
+  lastAiCallAt: Date | null;
+
   @Column('character varying', {
     name: 'nombre_telegram',
     nullable: true,

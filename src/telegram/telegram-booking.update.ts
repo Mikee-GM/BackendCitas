@@ -84,8 +84,13 @@ export class TelegramBookingUpdate {
   async getGroqResponse(
     systemPrompt: string,
     history: { role: 'user' | 'model'; parts: { text: string }[] }[],
+    clientTelegramId?: string,
   ): Promise<string> {
-    return this.telegramBookingService.getGroqResponse(systemPrompt, history);
+    return this.telegramBookingService.getGroqResponse(
+      systemPrompt,
+      history,
+      clientTelegramId,
+    );
   }
 
   async sendDelayedReply(ctx: BotContext, text: string) {
@@ -164,14 +169,27 @@ export class TelegramBookingUpdate {
       { role: 'user', parts: [{ text: 'Hola' }] },
     ];
 
+    const telegramId = ctx.from?.id?.toString();
+
     try {
       await ctx.sendChatAction('typing');
-      const responseText = await this.getGroqResponse(systemPrompt, history);
+      const responseText = await this.getGroqResponse(
+        systemPrompt,
+        history,
+        telegramId,
+      );
       history.push({ role: 'model', parts: [{ text: responseText }] });
       ctx.session.chatHistory = history;
 
       await this.sendDelayedReply(ctx, responseText);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message === 'AI_LIMIT_REACHED') {
+        await ctx.reply(
+          '⚠️ *Límite de IA alcanzado:* Has agotado tus consultas gratuitas de hoy con la Inteligencia Artificial. Por favor, intenta de nuevo mañana.',
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
       this.logger.error('Error starting LLM chat session:', err);
       const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}* y me encantaría atenderte. ¿Cuántas horas de servicio necesitas?`;
       await this.sendDelayedReply(ctx, fallbackMsg);
@@ -268,14 +286,27 @@ export class TelegramBookingUpdate {
       { role: 'user', parts: [{ text: 'Hola' }] },
     ];
 
+    const telegramId = ctx.from?.id?.toString();
+
     try {
       await ctx.sendChatAction('typing');
-      const responseText = await this.getGroqResponse(systemPrompt, history);
+      const responseText = await this.getGroqResponse(
+        systemPrompt,
+        history,
+        telegramId,
+      );
       history.push({ role: 'model', parts: [{ text: responseText }] });
       ctx.session.chatHistory = history;
 
       await this.sendDelayedReply(ctx, responseText);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message === 'AI_LIMIT_REACHED') {
+        await ctx.reply(
+          '⚠️ *Límite de IA alcanzado:* Has agotado tus consultas gratuitas de hoy con la Inteligencia Artificial. Por favor, intenta de nuevo mañana.',
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
       this.logger.error('Error starting LLM chat session (chained):', err);
       const fallbackMsg = `¡Hola! Soy *${empleada.nombreArtistico}*. Estaré libre aproximadamente a las *${horaEstimada}* para atenderte. ¿Cuántas horas de servicio necesitas?`;
       await this.sendDelayedReply(ctx, fallbackMsg);
@@ -1965,7 +1996,11 @@ export class TelegramBookingUpdate {
 
       try {
         await ctx.sendChatAction('typing');
-        let responseText = await this.getGroqResponse(systemPrompt, history);
+        let responseText = await this.getGroqResponse(
+          systemPrompt,
+          history,
+          telegramId,
+        );
 
         // Check if response contains the structured DATA block
         const dataMatch = responseText.match(/\[DATA:\s*(\{.*?\})\]/);
@@ -2028,7 +2063,14 @@ export class TelegramBookingUpdate {
         session.chatHistory = history;
 
         await this.sendDelayedReply(ctx, responseText);
-      } catch (err) {
+      } catch (err: any) {
+        if (err?.message === 'AI_LIMIT_REACHED') {
+          await ctx.reply(
+            '⚠️ *Límite de IA alcanzado:* Has agotado tus consultas gratuitas de hoy con la Inteligencia Artificial. Por favor, intenta de nuevo mañana.',
+            { parse_mode: 'Markdown' },
+          );
+          return;
+        }
         this.logger.error('Error in LLM booking chat flow:', err);
         await this.sendDelayedReply(
           ctx,

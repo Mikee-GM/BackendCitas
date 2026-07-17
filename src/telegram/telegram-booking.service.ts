@@ -1,6 +1,7 @@
 import { Injectable, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
@@ -32,12 +33,48 @@ export class TelegramBookingService {
     readonly servicesService: ServicesService,
     readonly loyaltyService: LoyaltyService,
     private readonly aiProviderService: AiProviderService,
+    private readonly configService: ConfigService,
   ) {}
 
   async getGroqResponse(
     systemPrompt: string,
     history: { role: 'user' | 'model'; parts: { text: string }[] }[],
+    clientTelegramId?: string,
   ): Promise<string> {
+    if (clientTelegramId) {
+      const client = await this.clientesRepository.findOne({
+        where: { telegramChatId: clientTelegramId },
+      });
+
+      if (client) {
+        const today = new Date();
+        const lastCall = client.lastAiCallAt
+          ? new Date(client.lastAiCallAt)
+          : null;
+
+        // Comprobar si el día, mes o año cambiaron en la zona horaria del servidor
+        const isDifferentDay =
+          !lastCall ||
+          today.getDate() !== lastCall.getDate() ||
+          today.getMonth() !== lastCall.getMonth() ||
+          today.getFullYear() !== lastCall.getFullYear();
+
+        if (isDifferentDay) {
+          client.aiCallsToday = 0;
+        }
+
+        const maxCalls =
+          this.configService.get<number>('MAX_DAILY_AI_CALLS') || 15;
+        if (client.aiCallsToday >= maxCalls) {
+          throw new Error('AI_LIMIT_REACHED');
+        }
+
+        client.aiCallsToday += 1;
+        client.lastAiCallAt = today;
+        await this.clientesRepository.save(client);
+      }
+    }
+
     const formattedHistory = history.map((msg) => ({
       role: msg.role === 'model' ? 'assistant' : 'user',
       content: msg.parts?.[0]?.text || '',
