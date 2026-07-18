@@ -149,6 +149,45 @@ export class Servicios {
   @ApiProperty({ description: 'Total Final', example: 1200.0 })
   totalFinal: number;
 
+  @Column('numeric', {
+    name: 'total_transporte',
+    precision: 10,
+    scale: 2,
+    default: () => '0',
+    transformer: new ColumnNumericTransformer(),
+  })
+  @ApiProperty({ description: 'Total de transporte', example: 100.0 })
+  totalTransporte: number;
+
+  @Column('varchar', {
+    name: 'estado_liquidacion',
+    length: 30,
+    default: () => "'cerrada'",
+  })
+  @ApiProperty({
+    description: 'Estado de la liquidación del transporte',
+    enum: ['transporte_pendiente', 'cerrada'],
+  })
+  estadoLiquidacion: 'transporte_pendiente' | 'cerrada';
+
+  @Column('varchar', {
+    name: 'telegram_resumen_provisional_id',
+    nullable: true,
+  })
+  @ApiPropertyOptional({ description: 'Mensaje provisional del cliente' })
+  telegramResumenProvisionalId: string | null;
+
+  @Column('smallint', { name: 'recordatorios_regreso', default: () => '0' })
+  @ApiProperty({ description: 'Recordatorios de transporte de regreso' })
+  recordatoriosRegreso: number;
+
+  @Column('timestamp with time zone', {
+    name: 'proximo_recordatorio_regreso_at',
+    nullable: true,
+  })
+  @ApiPropertyOptional({ description: 'Próximo recordatorio de regreso' })
+  proximoRecordatorioRegresoAt: Date | null;
+
   @Column('timestamp with time zone', {
     name: 'hora_inicio_servicio',
     nullable: true,
@@ -191,29 +230,15 @@ export class Servicios {
 
   @Column('enum', {
     name: 'estado',
-    enum: [
-      'pendiente',
-      'en_curso',
-      'finalizado',
-      'cancelado',
-    ],
+    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
     default: 'pendiente',
   })
   @ApiProperty({
     description: 'Estado',
-    enum: [
-      'pendiente',
-      'en_curso',
-      'finalizado',
-      'cancelado',
-    ],
+    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
     example: 'pendiente',
   })
-  estado:
-    | 'pendiente'
-    | 'en_curso'
-    | 'finalizado'
-    | 'cancelado';
+  estado: 'pendiente' | 'en_curso' | 'finalizado' | 'cancelado';
 
   @Column('text', { name: 'notas', nullable: true })
   @ApiPropertyOptional({ description: 'Notas', example: 'Ejemplo' })
@@ -268,7 +293,6 @@ export class Servicios {
   })
   @ApiProperty({ description: 'Notificacion Extension Enviada', example: true })
   notificacionExtensionEnviada: boolean;
-
 
   @Column('timestamp with time zone', {
     name: 'created_at',
@@ -378,5 +402,4 @@ export class Servicios {
     example: [],
   })
   loyaltyTransactions: LoyaltyTransaction[];
-
 }

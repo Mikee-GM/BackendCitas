@@ -1,5 +1,13 @@
 import { Inject, forwardRef, Logger } from '@nestjs/common';
-import { Update, Start, Help, Ctx, Action, Command } from 'nestjs-telegraf';
+import {
+  Update,
+  Start,
+  Help,
+  Ctx,
+  Action,
+  Command,
+  Hears,
+} from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
@@ -7,6 +15,8 @@ import { JwtService } from '@nestjs/jwt';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
+import { Servicios } from '../services/entities/service.entity';
+import { Viajes } from '../trips/entities/trip.entity';
 import { TelegramService } from './telegram.service';
 import { TelegramBookingUpdate } from './telegram-booking.update';
 
@@ -21,6 +31,10 @@ export class TelegramAuthUpdate {
     private readonly clientesRepository: Repository<Clientes>,
     @InjectRepository(Empleadas)
     private readonly empleadasRepository: Repository<Empleadas>,
+    @InjectRepository(Servicios)
+    private readonly serviciosRepository: Repository<Servicios>,
+    @InjectRepository(Viajes)
+    private readonly viajesRepository: Repository<Viajes>,
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
@@ -82,6 +96,7 @@ export class TelegramAuthUpdate {
       await ctx.reply(
         `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
           `¿Qué deseas hacer hoy?`,
+        user.rol === 'empleada' ? this.employeeMenu() : undefined,
       );
       return;
     }
@@ -169,11 +184,11 @@ export class TelegramAuthUpdate {
     if (user.rol === 'chofer' || user.rol === 'empleada') {
       await ctx.reply(
         `📍 Por favor, comparte tu ubicación en tiempo real utilizando el botón de abajo para poder recibir y gestionar servicios.`,
-        Markup.keyboard([
-          [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
-        ])
-          .resize()
-          .oneTime(),
+        user.rol === 'empleada'
+          ? this.employeeMenu()
+          : Markup.keyboard([
+              [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+            ]).resize(),
       );
     }
 
@@ -199,6 +214,182 @@ export class TelegramAuthUpdate {
         }
       }
     }
+  }
+
+  @Hears('📋 Servicios de hoy')
+  async onEmployeeServicesToday(@Ctx() ctx: Context) {
+    const employee = await this.getEmployeeFromContext(ctx);
+    if (!employee) return;
+
+    const services = await this.serviciosRepository
+      .createQueryBuilder('servicio')
+      .leftJoinAndSelect('servicio.cliente', 'cliente')
+      .where('servicio.empleadaId = :employeeId', { employeeId: employee.id })
+      .andWhere('servicio.estado = :status', { status: 'finalizado' })
+      .andWhere(
+        `(servicio.horaFinServicio AT TIME ZONE 'America/Mexico_City')::date = ` +
+          `(CURRENT_TIMESTAMP AT TIME ZONE 'America/Mexico_City')::date`,
+      )
+      .orderBy('servicio.horaFinServicio', 'DESC')
+      .getMany();
+
+    if (services.length === 0) {
+      await ctx.reply('Hoy todavía no tienes servicios finalizados.');
+      return;
+    }
+
+    const lines = services.map(
+      (service, index) =>
+        `${index + 1}. ${this.formatTime(service.horaInicioServicio)}–${this.formatTime(service.horaFinServicio)}` +
+        ` · ${service.cliente?.nombreTelegram || 'Cliente'} · $${Number(service.totalFinal).toFixed(2)}`,
+    );
+    await ctx.reply(
+      `📋 Servicios finalizados hoy: ${services.length}\n\n${lines.join('\n')}`,
+    );
+  }
+
+  @Hears('🟢 Servicio activo')
+  async onEmployeeActiveService(@Ctx() ctx: Context) {
+    const employee = await this.getEmployeeFromContext(ctx);
+    if (!employee) return;
+
+    const service = await this.serviciosRepository.findOne({
+      where: { empleadaId: employee.id, estado: 'en_curso' },
+      relations: { cliente: true },
+      order: { horaInicioServicio: 'DESC' },
+    });
+
+    if (!service) {
+      await ctx.reply('No tienes un servicio activo en este momento.');
+      return;
+    }
+
+    const uberTrips = await this.viajesRepository.find({
+      where: { servicioId: service.id, proveedorTransporte: 'uber' },
+      order: { horaNotificacion: 'DESC' },
+    });
+    const actionableUberTrip = uberTrips.find((trip) =>
+      ['llegado', 'en_curso'].includes(trip.estado),
+    );
+    const inlineButtons: any[][] = [];
+
+    if (actionableUberTrip?.estado === 'llegado') {
+      inlineButtons.push([
+        Markup.button.callback(
+          '🚗 Ya estoy en el Uber',
+          `eu:${actionableUberTrip.id}:i`,
+        ),
+      ]);
+    } else if (actionableUberTrip?.estado === 'en_curso') {
+      inlineButtons.push([
+        Markup.button.callback('📍 Ya llegué', `eu:${actionableUberTrip.id}:f`),
+      ]);
+    }
+
+    inlineButtons.push(
+      [
+        Markup.button.callback(
+          '🏁 Finalizar Servicio',
+          `finalizar_servicio:${service.id}`,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '➕ Agregar Extra',
+          `agregar_extra_list:${service.id}`,
+        ),
+      ],
+    );
+
+    await ctx.reply(
+      `🟢 Servicio activo\n\n` +
+        `Cliente: ${service.cliente?.nombreTelegram || 'Cliente'}\n` +
+        `Inicio: ${this.formatTime(service.horaInicioServicio)}\n` +
+        `Duración pactada: ${Number(service.duracionPactadaHoras)} h\n` +
+        `Total actual: $${Number(service.totalFinal).toFixed(2)}`,
+      Markup.inlineKeyboard(inlineButtons),
+    );
+  }
+
+  @Hears('🚗 Estatus del chofer')
+  async onEmployeeDriverStatus(@Ctx() ctx: Context) {
+    const employee = await this.getEmployeeFromContext(ctx);
+    if (!employee) return;
+
+    const service = await this.serviciosRepository.findOne({
+      where: [
+        { empleadaId: employee.id, estado: 'en_curso' },
+        { empleadaId: employee.id, estado: 'pendiente' },
+      ],
+      order: { createdAt: 'DESC' },
+    });
+    if (!service) {
+      await ctx.reply('No tienes un servicio vigente con transporte.');
+      return;
+    }
+
+    const trips = await this.viajesRepository.find({
+      where: { servicioId: service.id },
+      relations: { chofer: true },
+      order: { horaNotificacion: 'DESC' },
+    });
+    if (trips.length === 0) {
+      await ctx.reply('Aún no se ha solicitado un chofer para tu servicio.');
+      return;
+    }
+
+    const labels: Record<string, string> = {
+      notificado: 'Buscando confirmación',
+      aceptado: 'Chofer asignado',
+      llegado: 'El chofer ya llegó',
+      en_curso: 'Viaje en curso',
+      finalizado: 'Viaje finalizado',
+      rechazado: 'Oferta rechazada',
+      cancelado: 'Viaje cancelado',
+    };
+    const lines = trips.map((trip) => {
+      const driver = trip.chofer?.nombre
+        ? ` · ${trip.chofer.nombre}${trip.chofer.telefono ? ` (${trip.chofer.telefono})` : ''}`
+        : '';
+      const provider = trip.proveedorTransporte === 'uber' ? 'Uber' : 'Chofer';
+      return `${trip.tipo === 'ida' ? 'Ida' : 'Regreso'}: ${provider} · ${labels[trip.estado] || trip.estado}${driver}`;
+    });
+    await ctx.reply(`🚗 Estatus de transporte\n\n${lines.join('\n')}`);
+  }
+
+  private employeeMenu() {
+    return Markup.keyboard([
+      ['📋 Servicios de hoy', '🟢 Servicio activo'],
+      ['🚗 Estatus del chofer'],
+      [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+    ]).resize();
+  }
+
+  private async getEmployeeFromContext(
+    ctx: Context,
+  ): Promise<Empleadas | null> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return null;
+
+    const employee = await this.empleadasRepository.findOne({
+      where: { usuario: { telegramChatId: telegramId, rol: 'empleada' } },
+      relations: { usuario: true },
+    });
+    if (!employee) {
+      await ctx.reply(
+        'Esta opción solo está disponible para empleadas con una cuenta vinculada.',
+      );
+    }
+    return employee;
+  }
+
+  private formatTime(date: Date | null): string {
+    if (!date) return 'Sin registrar';
+    return new Intl.DateTimeFormat('es-MX', {
+      timeZone: 'America/Mexico_City',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(date));
   }
 
   @Command('desvincular')

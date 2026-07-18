@@ -30,6 +30,7 @@ import {
 } from '../ai/prompts/prompts';
 import { clientMessages } from './client-messages';
 import { AiMessageService } from '../ai/ai-message.service';
+import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
 
 interface SessionData {
   step?:
@@ -84,6 +85,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly extrasCatalogoRepository: Repository<ExtrasCatalogo>,
     @InjectRepository(ExtrasServicio)
     private readonly extrasServicioRepository: Repository<ExtrasServicio>,
+    @InjectRepository(ConversacionesTelegram)
+    private readonly conversationsRepository: Repository<ConversacionesTelegram>,
     private readonly realtimeEventsService: RealtimeEventsService,
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => ServicesService))
@@ -363,31 +366,26 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     try {
       // Editar el mensaje para remover los botones inline de pago
-      await ctx.editMessageText(
-        clientMessages.locationRequest(),
-        { parse_mode: 'Markdown' },
-      );
+      await ctx.editMessageText(clientMessages.locationRequest(), {
+        parse_mode: 'Markdown',
+      });
     } catch (err) {
       console.error('Error al editar mensaje de pago:', err);
     }
 
     // Enviar el teclado nativo para compartir ubicación
-    await ctx.reply(
-      clientMessages.locationRequest(),
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard([
-          [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
-        ])
-          .oneTime()
-          .resize(),
-      },
-    );
+    await ctx.reply(clientMessages.locationRequest(), {
+      parse_mode: 'Markdown',
+      ...Markup.keyboard([
+        [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+      ])
+        .oneTime()
+        .resize(),
+    });
   }
 
   @Action(/^agregar_extra_list:(.+)$/)
   async onAgregarExtraList(@Ctx() ctx: BotContext) {
-    await ctx.answerCbQuery();
     const match = (ctx as any).match;
     if (!match) return;
     const servicioId = match[1];
@@ -401,6 +399,22 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.reply('❌ Servicio no encontrado.');
       return;
     }
+
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('Este servicio ya no está activo.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCbQuery();
 
     // Buscar extras activos de la empleada
     const extras = await this.extrasCatalogoRepository.find({
@@ -446,7 +460,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @Action(/^agregar_extra_sel:(.+)$/)
   async onAgregarExtraSel(@Ctx() ctx: BotContext) {
-    await ctx.answerCbQuery();
     const match = (ctx as any).match;
     if (!match) return;
     const extraId = match[1];
@@ -478,6 +491,22 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('Este servicio ya no está activo.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
     // Guardar el extraId seleccionado en la sesión
     session.extraSelection.extraId = extraId;
 
@@ -505,7 +534,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @Action(/^agregar_extra_pay:(.+)$/)
   async onAgregarExtraPay(@Ctx() ctx: BotContext) {
-    await ctx.answerCbQuery();
     const match = (ctx as any).match;
     if (!match) return;
     const metodoPago = match[1] as 'tarjeta' | 'transferencia' | 'efectivo';
@@ -535,6 +563,22 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.reply('❌ Servicio o extra no encontrado.');
       return;
     }
+
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('Este servicio ya no está activo.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCbQuery();
 
     const telegramId = ctx.from?.id.toString();
     const user = await this.usuariosRepository.findOne({
@@ -641,8 +685,15 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    if (servicio.estado === 'finalizado') {
-      await ctx.answerCbQuery('⚠️ Este servicio ya fue finalizado.', {
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('Este servicio ya no está activo.', {
         show_alert: true,
       });
       return;
@@ -671,6 +722,37 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     });
   }
 
+  @Action(/^eu:([^:]+):([if])$/)
+  async onEmployeeUberStatus(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+    if (!user)
+      return ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+    const match = (ctx as any).match;
+    try {
+      await this.servicesService.updateUberStatus(
+        match[1],
+        user.id,
+        match[2] === 'f' ? 'employee_arrived' : 'employee_en_route',
+      );
+      await ctx.answerCbQuery(
+        match[2] === 'f' ? 'Llegada registrada' : 'Cliente notificado',
+      );
+      if (match[2] === 'i') {
+        await ctx.reply('Cuando llegues al destino, confirma tu llegada.', {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('📍 Ya llegué', `eu:${match[1]}:f`)],
+          ]),
+        });
+      }
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message, { show_alert: true });
+    }
+  }
+
   @Action(/^conf_fin_serv:(.+)$/)
   async onConfFinalizarServicio(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -696,8 +778,15 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    if (servicio.estado === 'finalizado') {
-      await ctx.answerCbQuery('⚠️ Este servicio ya fue finalizado.', {
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (servicio.estado !== 'en_curso') {
+      await ctx.answerCbQuery('Este servicio ya no está activo.', {
         show_alert: true,
       });
       return;
@@ -730,31 +819,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       duracionFormatted = parts.join(', ');
     }
     servicio.duracionFinalHoras = Number(duracionRealVal.toFixed(2));
+    servicio.estadoLiquidacion = 'transporte_pendiente';
+    servicio.recordatoriosRegreso = 0;
+    servicio.proximoRecordatorioRegresoAt = new Date(Date.now() + 5 * 60_000);
     await this.serviciosRepository.save(servicio);
-
-    let loyaltyAward: any = null;
-
-    // Ejecutar operaciones independientes en paralelo
-    const loyaltyPromise = (async () => {
-      try {
-        loyaltyAward = await this.loyaltyService.awardForFinalizedService(
-          servicio.id,
-        );
-      } catch (loyaltyErr) {
-        console.error(
-          `Error al otorgar puntos de lealtad para servicio ${servicio.id}:`,
-          loyaltyErr,
-        );
-      }
-    })();
-
-    const viajePromise = (async () => {
-      try {
-        await this.crearYDespacharViajeRegreso(servicio.id);
-      } catch (err) {
-        console.error('Error al crear viaje de regreso:', err);
-      }
-    })();
 
     const empleadaPromise = (async () => {
       try {
@@ -771,7 +839,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
     })();
 
-    await Promise.allSettled([loyaltyPromise, viajePromise, empleadaPromise]);
+    await Promise.allSettled([empleadaPromise]);
 
     await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
 
@@ -857,43 +925,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
       const resumenCliText =
         `🏁 *Gracias por compartir este rato conmigo.*\n\n` +
-        `Te dejo el resumen de nuestro servicio:\n` +
+        `Te dejo el resumen provisional de nuestro servicio:\n` +
         `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
         `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
         `• *Duración Real:* ${duracionFormatted}\n` +
-        `• *Total a Pagar:* $${total}\n` +
+        `• *Subtotal actual:* $${total}\n` +
         `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
         (clientExtrasStr ? `${clientExtrasStr}` : '') +
-        (loyaltyAward
-          ? `• *Puntos Ganados:* ${loyaltyAward.pointsEarned}\n` +
-            `• *Saldo de Puntos:* ${loyaltyAward.pointsBalance}\n` +
-            `• *Membresía:* ${loyaltyAward.tier.name}\n\n`
-          : '\n') +
-        `Por favor, califica el servicio recibido:`;
+        `\n⏳ Falta incorporar el costo del transporte de regreso. Te enviaré el total definitivo y la calificación cuando quede confirmado.`;
 
       const duracionPactadaVal = servicio.duracionPactadaHoras;
       const finalizoAntes = duracionRealVal < duracionPactadaVal;
 
-      const inlineButtons: any[] = [
-        [
-          Markup.button.callback('⭐', `calificar_servicio:${servicio.id}:1`),
-          Markup.button.callback('⭐⭐', `calificar_servicio:${servicio.id}:2`),
-          Markup.button.callback(
-            '⭐⭐⭐',
-            `calificar_servicio:${servicio.id}:3`,
-          ),
-        ],
-        [
-          Markup.button.callback(
-            '⭐⭐⭐⭐',
-            `calificar_servicio:${servicio.id}:4`,
-          ),
-          Markup.button.callback(
-            '⭐⭐⭐⭐⭐',
-            `calificar_servicio:${servicio.id}:5`,
-          ),
-        ],
-      ];
+      const inlineButtons: any[] = [];
 
       const jefeEncargado = servicio.empleada?.jefe || servicio.jefe;
       if (finalizoAntes && jefeEncargado?.telefono) {
@@ -913,7 +957,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
 
       try {
-        await ctx.telegram.sendMessage(
+        const provisionalMessage = await ctx.telegram.sendMessage(
           servicio.cliente.telegramChatId,
           resumenCliText,
           {
@@ -921,6 +965,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             ...Markup.inlineKeyboard(inlineButtons),
           },
         );
+        await this.serviciosRepository.update(servicio.id, {
+          telegramResumenProvisionalId:
+            provisionalMessage.message_id.toString(),
+        });
       } catch (err) {
         console.error(
           'Error al notificar al cliente del fin de servicio:',
@@ -929,6 +977,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
     }
 
+    try {
+      await this.servicesService.requestReturnTransport(servicio.id);
+    } catch (err) {
+      console.error('Error al solicitar transporte de regreso:', err);
+    }
   }
 
   @Action(/^canc_fin_serv:(.+)$/)
@@ -1615,7 +1668,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     } catch (err) {
       console.error('Error al editar mensaje de extensión:', err);
     }
-
   }
 
   @Action(/^no_extender_servicio:(.+)$/)
@@ -1711,6 +1763,12 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
 
       try {
+        const senderTelegramId = ctx.from?.id.toString();
+        const actor = senderTelegramId
+          ? await this.usuariosRepository.findOne({
+              where: { telegramChatId: senderTelegramId },
+            })
+          : null;
         const service = await this.serviciosRepository.findOne({
           where: {
             telegramThreadId: threadId.toString(),
@@ -1720,8 +1778,15 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           },
         });
 
-        if (service && service.clienteTelegramId) {
+        if (
+          service &&
+          actor &&
+          (actor.rol === 'admin' ||
+            (actor.rol === 'jefe' && service.jefeId === actor.id)) &&
+          service.clienteTelegramId
+        ) {
           await ctx.telegram.sendMessage(service.clienteTelegramId, text);
+          await this.recordConversation(service, 'jefe', text);
         }
       } catch (err) {
         this.logger.error('Error en Flujo 2 (Respuesta del Jefe):', err);
@@ -1778,6 +1843,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             );
             return;
           }
+
+          await this.recordConversation(activeService, 'cliente', text);
 
           if (!activeService.telegramThreadId) {
             const clientName =
@@ -1985,20 +2052,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               history.push({ role: 'model', parts: [{ text: responseText }] });
               session.chatHistory = history;
 
-              await ctx.reply(
-                responseText,
-                {
-                  ...Markup.keyboard([
-                    [
-                      Markup.button.locationRequest(
-                        '📍 Compartir mi Ubicación',
-                      ),
-                    ],
-                  ])
-                    .oneTime()
-                    .resize(),
-                },
-              );
+              await ctx.reply(responseText, {
+                ...Markup.keyboard([
+                  [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+                ])
+                  .oneTime()
+                  .resize(),
+              });
               return;
             }
           } catch (jsonErr) {
@@ -2286,18 +2346,41 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
   }
 
-  private async crearYDespacharViajeRegreso(servicioId: string): Promise<void> {
-    const viajesRepository =
-      this.serviciosRepository.manager.getRepository(Viajes);
-    const nuevoViajeRegreso = viajesRepository.create({
-      servicioId,
-      choferId: null,
-      tipo: 'regreso',
-      zona: 'domicilio',
-      tarifa: 50.0,
-      estado: 'notificado',
+  private async isAssignedEmployee(
+    ctx: Context,
+    service: Servicios,
+  ): Promise<boolean> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return false;
+
+    const employee = await this.empleadasRepository.findOne({
+      where: {
+        id: service.empleadaId,
+        usuario: { telegramChatId: telegramId, rol: 'empleada' },
+      },
+      relations: { usuario: true },
     });
-    const viajeRegresoGuardado = await viajesRepository.save(nuevoViajeRegreso);
-    await this.servicesService.dispatchViaje(viajeRegresoGuardado.id);
+
+    return Boolean(employee);
+  }
+
+  private async recordConversation(
+    service: Servicios,
+    sender: 'ia' | 'jefe' | 'cliente',
+    message: string,
+  ): Promise<void> {
+    const saved = await this.conversationsRepository.save(
+      this.conversationsRepository.create({
+        clienteId: service.clienteId,
+        servicioId: service.id,
+        emisor: sender,
+        mensaje: message,
+        iaActiva: service.iaActiva,
+      }),
+    );
+    this.realtimeEventsService.emitToBoss(service.jefeId, {
+      type: 'chat_message',
+      data: saved,
+    });
   }
 }

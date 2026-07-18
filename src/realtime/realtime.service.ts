@@ -5,8 +5,10 @@ import { map } from 'rxjs/operators';
 @Injectable()
 export class RealtimeEventsService {
   private readonly jefesSubject = new Subject<any>();
+  private readonly bossSubjects = new Map<string, Subject<any>>();
   private readonly employeeSubjects = new Map<string, Subject<any>>();
   private readonly driverSubjects = new Map<string, Subject<any>>();
+  private readonly clientSubjects = new Map<string, Subject<any>>();
 
   getJefesStream(): Observable<MessageEvent> {
     return this.jefesSubject.asObservable().pipe(
@@ -14,6 +16,16 @@ export class RealtimeEventsService {
         data,
       })),
     );
+  }
+
+  getBossStream(bossId: string): Observable<MessageEvent> {
+    if (!this.bossSubjects.has(bossId)) {
+      this.bossSubjects.set(bossId, new Subject<any>());
+    }
+    return this.bossSubjects
+      .get(bossId)!
+      .asObservable()
+      .pipe(map((data) => ({ data })));
   }
 
   getEmployeeStream(empleadaId: string): Observable<MessageEvent> {
@@ -44,7 +56,22 @@ export class RealtimeEventsService {
       );
   }
 
+  getClientStream(clienteId: string): Observable<MessageEvent> {
+    if (!this.clientSubjects.has(clienteId)) {
+      this.clientSubjects.set(clienteId, new Subject<any>());
+    }
+    return this.clientSubjects
+      .get(clienteId)!
+      .asObservable()
+      .pipe(map((data) => ({ data })));
+  }
+
   emitToJefes(event: any) {
+    this.jefesSubject.next(event);
+  }
+
+  emitToBoss(bossId: string, event: any) {
+    this.bossSubjects.get(bossId)?.next(event);
     this.jefesSubject.next(event);
   }
 
@@ -60,5 +87,9 @@ export class RealtimeEventsService {
     if (subject) {
       subject.next(event);
     }
+  }
+
+  emitToClient(clienteId: string, event: any) {
+    this.clientSubjects.get(clienteId)?.next(event);
   }
 }

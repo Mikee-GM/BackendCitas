@@ -8,12 +8,14 @@ import { Choferes } from '../drivers/entities/driver.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { TelegramModule } from '../telegram/telegram.module';
 import { AiModule } from '../ai/ai.module';
+import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Servicios, Viajes, Choferes, Usuarios]),
     forwardRef(() => TelegramModule),
     AiModule,
+    LoyaltyModule,
   ],
   controllers: [ServicesController],
   providers: [ServicesService],
