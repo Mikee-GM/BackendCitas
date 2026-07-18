@@ -69,6 +69,7 @@ export class Viajes {
     enum: [
       'notificado',
       'aceptado',
+      'en_camino',
       'llegado',
       'en_curso',
       'finalizado',
@@ -82,6 +83,7 @@ export class Viajes {
     enum: [
       'notificado',
       'aceptado',
+      'en_camino',
       'llegado',
       'en_curso',
       'finalizado',
@@ -93,6 +95,7 @@ export class Viajes {
   estado:
     | 'notificado'
     | 'aceptado'
+    | 'en_camino'
     | 'llegado'
     | 'en_curso'
     | 'finalizado'
@@ -109,6 +112,10 @@ export class Viajes {
     example: 'interno',
   })
   proveedorTransporte: string;
+
+  @Column('varchar', { name: 'telegram_uber_file_id', nullable: true })
+  @ApiPropertyOptional({ description: 'File ID de la captura de Uber' })
+  telegramUberFileId: string | null;
 
   @Column('timestamp with time zone', {
     name: 'hora_notificacion',

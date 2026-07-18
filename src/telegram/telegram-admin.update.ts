@@ -1,5 +1,5 @@
 import { Inject, forwardRef } from '@nestjs/common';
-import { Update, Ctx, Action } from 'nestjs-telegraf';
+import { Update, Ctx, Action, On } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -100,6 +100,300 @@ export class TelegramAdminUpdate {
     });
   }
 
+  private async getActor(ctx: Context): Promise<Usuarios | null> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return null;
+    return this.usuariosRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+  }
+
+  @Action(/^regreso_transporte:(.+):(interno|uber)$/)
+  async onReturnTransport(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor)
+      return ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+    const match = (ctx as any).match;
+    try {
+      const result = await this.servicesService.chooseReturnTransport(
+        match[1],
+        actor.id,
+        match[2],
+      );
+      await ctx.answerCbQuery('Transporte de regreso registrado');
+      if (match[2] === 'interno') {
+        await ctx.editMessageText(
+          '🚗 Regreso con chofer seleccionado. Buscando chofer disponible…',
+          {
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '📱 Cambiar a Uber',
+                  `cambiar_transporte:${result.trip.id}:uber`,
+                ),
+              ],
+            ]),
+          },
+        );
+      } else {
+        await ctx.editMessageText('📱 Regreso con Uber seleccionado.', {
+          ...Markup.inlineKeyboard([
+            [Markup.button.url('📱 Pedir Uber', result.uberLink!)],
+            [
+              Markup.button.callback(
+                '📸 Adjuntar captura',
+                `uber_attach:${result.trip.id}`,
+              ),
+            ],
+            [
+              Markup.button.callback(
+                '🚗 Cambiar a chofer',
+                `cambiar_transporte:${result.trip.id}:interno`,
+              ),
+            ],
+          ]),
+        });
+      }
+    } catch (error: any) {
+      await ctx.answerCbQuery(
+        error.message || 'No se pudo elegir el transporte',
+        {
+          show_alert: true,
+        },
+      );
+    }
+  }
+
+  @Action(/^cambiar_transporte:(.+):(interno|uber)$/)
+  async onChangeTripTransport(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) {
+      await ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+      return;
+    }
+    const match = (ctx as any).match;
+    const provider = match[2] as 'interno' | 'uber';
+    try {
+      const result = await this.servicesService.changeTripTransport(
+        match[1],
+        actor.id,
+        provider,
+      );
+      await ctx.answerCbQuery('Método de transporte actualizado');
+      const buttons =
+        provider === 'uber'
+          ? [
+              [Markup.button.url('📱 Pedir Uber', result.uberLink!)],
+              [
+                Markup.button.callback(
+                  '🚗 Cambiar a chofer',
+                  `cambiar_transporte:${result.trip.id}:interno`,
+                ),
+              ],
+            ]
+          : [
+              [
+                Markup.button.callback(
+                  '📱 Cambiar a Uber',
+                  `cambiar_transporte:${result.trip.id}:uber`,
+                ),
+              ],
+            ];
+      await ctx.editMessageText(
+        provider === 'uber'
+          ? '📱 Viaje cambiado a Uber.'
+          : '🚗 Viaje cambiado a chofer. Buscando disponibilidad…',
+        { ...Markup.inlineKeyboard(buttons) },
+      );
+    } catch (error: any) {
+      await ctx.answerCbQuery(
+        error.message || 'No se pudo cambiar el transporte',
+        { show_alert: true },
+      );
+    }
+  }
+
+  @Action(/^uber_attach:(.+)$/)
+  async onUberAttach(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor)
+      return ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+    const tripId = (ctx as any).match[1];
+    (ctx as any).session = {
+      ...(ctx as any).session,
+      step: 'AWAITING_UBER_SCREENSHOT',
+      uberTripId: tripId,
+    };
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      '📸 Envía ahora la captura de pantalla con los datos del Uber.',
+    );
+  }
+
+  @On('photo')
+  async onUberPhoto(@Ctx() ctx: Context) {
+    const session = (ctx as any).session;
+    if (session?.step !== 'AWAITING_UBER_SCREENSHOT') return;
+    const actor = await this.getActor(ctx);
+    if (!actor) return;
+    const photos = (ctx.message as any)?.photo;
+    const fileId = photos?.[photos.length - 1]?.file_id;
+    if (!fileId) return;
+    try {
+      await this.servicesService.saveUberScreenshot(
+        session.uberTripId,
+        actor.id,
+        fileId,
+      );
+      session.step = 'AWAITING_UBER_FARE_ACTION';
+      await ctx.reply(
+        '✅ Captura guardada. Cuando tengas el costo final, pulsa el botón para introducir la tarifa.',
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '💵 Introducir tarifa',
+                `uber_fare_enter:${session.uberTripId}`,
+              ),
+            ],
+          ]),
+        },
+      );
+    } catch (error: any) {
+      await ctx.reply(`❌ ${error.message}`);
+    }
+  }
+
+  @Action(/^uber_fare_enter:(.+)$/)
+  async onUberFareEnter(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) {
+      await ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+      return;
+    }
+    const tripId = (ctx as any).match[1];
+    (ctx as any).session = {
+      ...(ctx as any).session,
+      step: 'AWAITING_UBER_FARE',
+      uberTripId: tripId,
+      pendingUberFare: undefined,
+    };
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      '💵 Escribe ahora el costo final del Uber, por ejemplo: 185.50',
+    );
+  }
+
+  @Action(/^uber_fare_confirm:(.+)$/)
+  async onUberFareConfirm(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    const session = (ctx as any).session;
+    if (!actor || !session?.pendingUberFare) {
+      return ctx.answerCbQuery(
+        'La sesión expiró; adjunta la captura nuevamente',
+        {
+          show_alert: true,
+        },
+      );
+    }
+    try {
+      await this.servicesService.confirmUberFare(
+        (ctx as any).match[1],
+        actor.id,
+        session.pendingUberFare,
+      );
+      (ctx as any).session = {};
+      await ctx.answerCbQuery('Costo registrado');
+      await ctx.editMessageText(
+        '✅ Costo del Uber registrado y total actualizado.',
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '🚗 Uber en camino',
+                `jefe_uber_estado:${(ctx as any).match[1]}:en_camino`,
+              ),
+            ],
+          ]),
+        },
+      );
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message, { show_alert: true });
+    }
+  }
+
+  @Action(/^uber_fare_correct:(.+)$/)
+  async onUberFareCorrect(@Ctx() ctx: Context) {
+    const session = (ctx as any).session || {};
+    session.step = 'AWAITING_UBER_FARE';
+    session.uberTripId = (ctx as any).match[1];
+    delete session.pendingUberFare;
+    (ctx as any).session = session;
+    await ctx.answerCbQuery();
+    await ctx.reply('Escribe nuevamente el costo final del Uber.');
+  }
+
+  @Action(/^uber_fare_cancel:(.+)$/)
+  async onUberFareCancel(@Ctx() ctx: Context) {
+    const tripId = (ctx as any).match[1];
+    (ctx as any).session = {
+      ...(ctx as any).session,
+      step: 'AWAITING_UBER_FARE_ACTION',
+      uberTripId: tripId,
+      pendingUberFare: undefined,
+    };
+    await ctx.answerCbQuery('Registro cancelado');
+    await ctx.editMessageText(
+      'Registro del costo cancelado. Puedes introducir la tarifa cuando estés listo.',
+      {
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '💵 Introducir tarifa',
+              `uber_fare_enter:${tripId}`,
+            ),
+          ],
+        ]),
+      },
+    );
+  }
+
+  @Action(/^jefe_uber_estado:(.+):(en_camino|llegado)$/)
+  async onBossUberStatus(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor)
+      return ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+    const match = (ctx as any).match;
+    try {
+      await this.servicesService.updateUberStatus(
+        match[1],
+        actor.id,
+        match[2] === 'llegado' ? 'uber_arrived' : 'uber_en_route',
+      );
+      await ctx.answerCbQuery(
+        match[2] === 'llegado'
+          ? 'La empleada fue notificada'
+          : 'Estado enviado',
+      );
+      if (match[2] === 'en_camino') {
+        await ctx.editMessageText('🚗 Uber marcado en camino.', {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '📍 Uber llegó',
+                `jefe_uber_estado:${match[1]}:llegado`,
+              ),
+            ],
+          ]),
+        });
+      } else {
+        await ctx.editMessageText('✅ La llegada del Uber fue confirmada.');
+      }
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message, { show_alert: true });
+    }
+  }
+
   @Action(/^conf_ja:(.+):([01])(?::(chofer|uber))?$/)
   async onConfJefeAutorizar(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -145,6 +439,7 @@ export class TelegramAdminUpdate {
 
     try {
       let uberLink: string | undefined;
+      let viajeId: string | undefined;
       if (accept) {
         const res = await this.servicesService.aceptar(
           serviceId,
@@ -152,6 +447,7 @@ export class TelegramAdminUpdate {
           transportType as any,
         );
         uberLink = res.uberLink;
+        viajeId = res.viajeId;
         await ctx.answerCbQuery('🟢 Servicio Aceptado exitosamente.');
       } else {
         await this.servicesService.rechazar(serviceId, user.id);
@@ -180,6 +476,25 @@ export class TelegramAdminUpdate {
 
       if (accept && transportType === 'uber' && uberLink) {
         inlineButtons.push([Markup.button.url('📱 Pedir Uber', uberLink)]);
+        if (viajeId) {
+          inlineButtons.push([
+            Markup.button.callback(
+              '📸 Adjuntar captura',
+              `uber_attach:${viajeId}`,
+            ),
+          ]);
+        }
+      }
+
+      if (accept && viajeId) {
+        inlineButtons.push([
+          Markup.button.callback(
+            transportType === 'uber'
+              ? '🚗 Cambiar a chofer'
+              : '📱 Cambiar a Uber',
+            `cambiar_transporte:${viajeId}:${transportType === 'uber' ? 'interno' : 'uber'}`,
+          ),
+        ]);
       }
 
       if (accept && servicio.cliente?.telegramChatId) {

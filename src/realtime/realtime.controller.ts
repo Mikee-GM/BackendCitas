@@ -46,7 +46,9 @@ export class RealtimeController {
     if (payload.rol !== 'jefe' && payload.rol !== 'admin') {
       throw new UnauthorizedException('No tienes permisos para este panel');
     }
-    return this.realtimeEventsService.getJefesStream();
+    return payload.rol === 'admin'
+      ? this.realtimeEventsService.getJefesStream()
+      : this.realtimeEventsService.getBossStream(payload.sub);
   }
 
   @Sse('sse/empleada')
@@ -79,5 +81,15 @@ export class RealtimeController {
       throw new UnauthorizedException('Perfil de chofer no encontrado');
     }
     return this.realtimeEventsService.getDriverStream(chofer.id);
+  }
+
+  @Sse('sse/cliente')
+  @ApiSseTokenDocs('Conectar canal SSE para cliente autenticado')
+  sseCliente(@Query('token') token: string): Observable<any> {
+    const payload = this.verifyToken(token);
+    if (payload.rol !== 'cliente' || !payload.clienteId) {
+      throw new UnauthorizedException('Token de cliente inválido');
+    }
+    return this.realtimeEventsService.getClientStream(payload.clienteId);
   }
 }

@@ -10,7 +10,7 @@ import { Choferes } from '../drivers/entities/driver.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { Servicios } from '../services/entities/service.entity';
-import { clientMessages } from './client-messages';
+import { AiMessageService } from '../ai/ai-message.service';
 
 interface DriverCacheEntry {
   userId: string;
@@ -41,6 +41,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     private readonly servicesService: ServicesService,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    private readonly aiMessageService: AiMessageService,
   ) {
     this.cacheCleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -271,7 +272,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
           },
         });
 
-        this.realtimeEventsService.emitToJefes({
+        this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
           type: 'trip_accepted',
           data: {
             tripId: trip.id,
@@ -926,13 +927,17 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     // Notificar al cliente que la empleada va en camino
     if (trip.servicio?.cliente?.telegramChatId) {
       try {
+        const clientMessage = await this.aiMessageService.generate(
+          'employee_on_the_way',
+          {
+            employeeName: trip.servicio.empleada.nombreArtistico,
+            driverName: chofer.nombre,
+          },
+          'Ya voy para allá, nos vemos en un ratico 😊',
+        );
         await ctx.telegram.sendMessage(
           trip.servicio.cliente.telegramChatId,
-          clientMessages.onTheWay(
-            trip.servicio.empleada.nombreArtistico,
-            chofer.nombre,
-          ),
-          { parse_mode: 'Markdown' },
+          clientMessage,
         );
       } catch (telegramErr) {
         console.error(
@@ -1155,6 +1160,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         const horaLlegada = new Date();
         trip.servicio.horaLlegadaCasa = horaLlegada;
         serviceUpdateData.horaLlegadaCasa = horaLlegada;
+        serviceUpdateData.estadoLiquidacion = 'cerrada';
 
         // Eliminar el tema (hilo) del grupo de Telegram si es viaje de regreso (final del servicio completo)
         const jefeGrupoId =
@@ -1191,6 +1197,39 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     // Ejecutar todas las promesas en paralelo
     await Promise.all(promises);
 
+    if (trip.tipo === 'regreso') {
+      const bossChatId = trip.servicio.jefe?.telegramChatId;
+      if (bossChatId) {
+        await ctx.telegram
+          .sendMessage(
+            bossChatId,
+            `La empleada ${trip.servicio.empleada.nombreArtistico} llegó a su destino. El servicio quedó completado.`,
+          )
+          .catch(() => undefined);
+      }
+      if (trip.servicio.cliente?.telegramChatId) {
+        await ctx.telegram
+          .sendMessage(
+            trip.servicio.cliente.telegramChatId,
+            'El servicio quedó completado: la empleada llegó a su destino.',
+          )
+          .catch(() => undefined);
+      }
+      this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
+        type: 'trip_status_updated',
+        data: {
+          serviceId: trip.servicioId,
+          tripId: trip.id,
+          state: 'finalizado',
+          tripType: 'regreso',
+        },
+      });
+      this.realtimeEventsService.emitToClient(trip.servicio.clienteId, {
+        type: 'service_fully_completed',
+        data: { serviceId: trip.servicioId, tripId: trip.id },
+      });
+    }
+
     // Invalidad caché del chofer ya que chofer.disponible cambió a true
     this.driverIdentityCache.delete(telegramId);
 
@@ -1214,10 +1253,14 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     // Notificar al cliente que la empleada ha llegado (únicamente para viajes de ida)
     if (trip.tipo === 'ida' && trip.servicio?.cliente?.telegramChatId) {
       try {
+        const clientMessage = await this.aiMessageService.generate(
+          'employee_arrived',
+          { employeeName: trip.servicio.empleada.nombreArtistico },
+          'Ya llegué al punto que cuadramos, aquí te espero 😊',
+        );
         await ctx.telegram.sendMessage(
           trip.servicio.cliente.telegramChatId,
-          clientMessages.arrived(trip.servicio.empleada.nombreArtistico),
-          { parse_mode: 'Markdown' },
+          clientMessage,
         );
       } catch (telegramErr) {
         console.error(

@@ -19,9 +19,11 @@ import { ServicesModule } from '../services/services.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { TelegramSession } from './entities/telegram-session.entity';
 import { AiModule } from '../ai/ai.module';
+import { Viajes } from '../trips/entities/trip.entity';
 
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { ExtrasServicio } from '../service-extras/entities/service-extra.entity'
       ExtrasCatalogo,
       ExtrasServicio,
       TelegramSession,
+      Viajes,
+      ConversacionesTelegram,
     ]),
     AuthModule,
     LoyaltyModule,

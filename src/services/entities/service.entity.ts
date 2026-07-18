@@ -149,6 +149,45 @@ export class Servicios {
   @ApiProperty({ description: 'Total Final', example: 1200.0 })
   totalFinal: number;
 
+  @Column('numeric', {
+    name: 'total_transporte',
+    precision: 10,
+    scale: 2,
+    default: () => '0',
+    transformer: new ColumnNumericTransformer(),
+  })
+  @ApiProperty({ description: 'Total de transporte', example: 100.0 })
+  totalTransporte: number;
+
+  @Column('varchar', {
+    name: 'estado_liquidacion',
+    length: 30,
+    default: () => "'cerrada'",
+  })
+  @ApiProperty({
+    description: 'Estado de la liquidación del transporte',
+    enum: ['transporte_pendiente', 'cerrada'],
+  })
+  estadoLiquidacion: 'transporte_pendiente' | 'cerrada';
+
+  @Column('varchar', {
+    name: 'telegram_resumen_definitivo_id',
+    nullable: true,
+  })
+  @ApiPropertyOptional({ description: 'Mensaje definitivo del cliente' })
+  telegramResumenDefinitivoId: string | null;
+
+  @Column('smallint', { name: 'recordatorios_regreso', default: () => '0' })
+  @ApiProperty({ description: 'Recordatorios de transporte de regreso' })
+  recordatoriosRegreso: number;
+
+  @Column('timestamp with time zone', {
+    name: 'proximo_recordatorio_regreso_at',
+    nullable: true,
+  })
+  @ApiPropertyOptional({ description: 'Próximo recordatorio de regreso' })
+  proximoRecordatorioRegresoAt: Date | null;
+
   @Column('timestamp with time zone', {
     name: 'hora_inicio_servicio',
     nullable: true,
@@ -191,32 +230,15 @@ export class Servicios {
 
   @Column('enum', {
     name: 'estado',
-    enum: [
-      'pendiente',
-      'en_curso',
-      'finalizado',
-      'cancelado',
-      'pendiente_encadenado',
-    ],
+    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
     default: 'pendiente',
   })
   @ApiProperty({
     description: 'Estado',
-    enum: [
-      'pendiente',
-      'en_curso',
-      'finalizado',
-      'cancelado',
-      'pendiente_encadenado',
-    ],
+    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
     example: 'pendiente',
   })
-  estado:
-    | 'pendiente'
-    | 'en_curso'
-    | 'finalizado'
-    | 'cancelado'
-    | 'pendiente_encadenado';
+  estado: 'pendiente' | 'en_curso' | 'finalizado' | 'cancelado';
 
   @Column('text', { name: 'notas', nullable: true })
   @ApiPropertyOptional({ description: 'Notas', example: 'Ejemplo' })
@@ -271,27 +293,6 @@ export class Servicios {
   })
   @ApiProperty({ description: 'Notificacion Extension Enviada', example: true })
   notificacionExtensionEnviada: boolean;
-
-  /** ID del servicio que debe terminar antes de que este pueda iniciar (cita encadenada) */
-  @Column('uuid', { name: 'servicio_previo_id', nullable: true })
-  @ApiPropertyOptional({
-    description: 'Servicio Previo Id',
-    example: '00000000-0000-4000-8000-000000000000',
-  })
-  servicioPrevioId: string | null;
-
-  /** Estimación dinámica de cuándo iniciará este servicio (actualizada por trigger al extenderse el previo) */
-  @Column('timestamp with time zone', {
-    name: 'hora_inicio_estimada',
-    nullable: true,
-  })
-  @ApiPropertyOptional({
-    description: 'Hora Inicio Estimada',
-    type: String,
-    format: 'date-time',
-    example: '2026-07-09T12:00:00.000Z',
-  })
-  horaInicioEstimada: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
@@ -401,25 +402,4 @@ export class Servicios {
     example: [],
   })
   loyaltyTransactions: LoyaltyTransaction[];
-
-  /** Servicio previo al que está encadenado este (si aplica) */
-  @ManyToOne(() => Servicios, (s) => s.serviciosEncadenados, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn([{ name: 'servicio_previo_id', referencedColumnName: 'id' }])
-  @ApiPropertyOptional({
-    description: 'Servicio Previo',
-    type: () => Servicios,
-  })
-  servicioPrevio: Servicios | null;
-
-  /** Servicios que están en cola esperando que este termine */
-  @OneToMany(() => Servicios, (s) => s.servicioPrevio)
-  @ApiProperty({
-    description: 'Servicios Encadenados',
-    type: () => [Servicios],
-    example: [],
-  })
-  serviciosEncadenados: Servicios[];
 }
