@@ -124,6 +124,16 @@ export class TelegramAdminUpdate {
       if (match[2] === 'interno') {
         await ctx.editMessageText(
           '🚗 Regreso con chofer seleccionado. Buscando chofer disponible…',
+          {
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '📱 Cambiar a Uber',
+                  `cambiar_transporte:${result.trip.id}:uber`,
+                ),
+              ],
+            ]),
+          },
         );
       } else {
         await ctx.editMessageText('📱 Regreso con Uber seleccionado.', {
@@ -135,6 +145,12 @@ export class TelegramAdminUpdate {
                 `uber_attach:${result.trip.id}`,
               ),
             ],
+            [
+              Markup.button.callback(
+                '🚗 Cambiar a chofer',
+                `cambiar_transporte:${result.trip.id}:interno`,
+              ),
+            ],
           ]),
         });
       }
@@ -144,6 +160,55 @@ export class TelegramAdminUpdate {
         {
           show_alert: true,
         },
+      );
+    }
+  }
+
+  @Action(/^cambiar_transporte:(.+):(interno|uber)$/)
+  async onChangeTripTransport(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) {
+      await ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+      return;
+    }
+    const match = (ctx as any).match;
+    const provider = match[2] as 'interno' | 'uber';
+    try {
+      const result = await this.servicesService.changeTripTransport(
+        match[1],
+        actor.id,
+        provider,
+      );
+      await ctx.answerCbQuery('Método de transporte actualizado');
+      const buttons =
+        provider === 'uber'
+          ? [
+              [Markup.button.url('📱 Pedir Uber', result.uberLink!)],
+              [
+                Markup.button.callback(
+                  '🚗 Cambiar a chofer',
+                  `cambiar_transporte:${result.trip.id}:interno`,
+                ),
+              ],
+            ]
+          : [
+              [
+                Markup.button.callback(
+                  '📱 Cambiar a Uber',
+                  `cambiar_transporte:${result.trip.id}:uber`,
+                ),
+              ],
+            ];
+      await ctx.editMessageText(
+        provider === 'uber'
+          ? '📱 Viaje cambiado a Uber.'
+          : '🚗 Viaje cambiado a chofer. Buscando disponibilidad…',
+        { ...Markup.inlineKeyboard(buttons) },
+      );
+    } catch (error: any) {
+      await ctx.answerCbQuery(
+        error.message || 'No se pudo cambiar el transporte',
+        { show_alert: true },
       );
     }
   }
@@ -180,19 +245,15 @@ export class TelegramAdminUpdate {
         actor.id,
         fileId,
       );
-      session.step = 'AWAITING_UBER_FARE';
+      session.step = 'AWAITING_UBER_FARE_ACTION';
       await ctx.reply(
-        '💵 Escribe el costo final del Uber, por ejemplo: 185.50',
+        '✅ Captura guardada. Cuando tengas el costo final, pulsa el botón para introducir la tarifa.',
         {
           ...Markup.inlineKeyboard([
             [
               Markup.button.callback(
-                '🚗 Uber en camino',
-                `jefe_uber_estado:${session.uberTripId}:en_camino`,
-              ),
-              Markup.button.callback(
-                '📍 Uber llegó',
-                `jefe_uber_estado:${session.uberTripId}:llegado`,
+                '💵 Introducir tarifa',
+                `uber_fare_enter:${session.uberTripId}`,
               ),
             ],
           ]),
@@ -201,6 +262,26 @@ export class TelegramAdminUpdate {
     } catch (error: any) {
       await ctx.reply(`❌ ${error.message}`);
     }
+  }
+
+  @Action(/^uber_fare_enter:(.+)$/)
+  async onUberFareEnter(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) {
+      await ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
+      return;
+    }
+    const tripId = (ctx as any).match[1];
+    (ctx as any).session = {
+      ...(ctx as any).session,
+      step: 'AWAITING_UBER_FARE',
+      uberTripId: tripId,
+      pendingUberFare: undefined,
+    };
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      '💵 Escribe ahora el costo final del Uber, por ejemplo: 185.50',
+    );
   }
 
   @On('text')
@@ -263,6 +344,20 @@ export class TelegramAdminUpdate {
       await ctx.answerCbQuery('Costo registrado');
       await ctx.editMessageText(
         '✅ Costo del Uber registrado y total actualizado.',
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '🚗 Uber en camino',
+                `jefe_uber_estado:${(ctx as any).match[1]}:en_camino`,
+              ),
+              Markup.button.callback(
+                '📍 Uber llegó',
+                `jefe_uber_estado:${(ctx as any).match[1]}:llegado`,
+              ),
+            ],
+          ]),
+        },
       );
     } catch (error: any) {
       await ctx.answerCbQuery(error.message, { show_alert: true });
@@ -282,10 +377,26 @@ export class TelegramAdminUpdate {
 
   @Action(/^uber_fare_cancel:(.+)$/)
   async onUberFareCancel(@Ctx() ctx: Context) {
-    (ctx as any).session = {};
+    const tripId = (ctx as any).match[1];
+    (ctx as any).session = {
+      ...(ctx as any).session,
+      step: 'AWAITING_UBER_FARE_ACTION',
+      uberTripId: tripId,
+      pendingUberFare: undefined,
+    };
     await ctx.answerCbQuery('Registro cancelado');
     await ctx.editMessageText(
-      'Registro del costo cancelado. Puedes adjuntar la captura nuevamente.',
+      'Registro del costo cancelado. Puedes introducir la tarifa cuando estés listo.',
+      {
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '💵 Introducir tarifa',
+              `uber_fare_enter:${tripId}`,
+            ),
+          ],
+        ]),
+      },
     );
   }
 
@@ -401,6 +512,17 @@ export class TelegramAdminUpdate {
             ),
           ]);
         }
+      }
+
+      if (accept && viajeId) {
+        inlineButtons.push([
+          Markup.button.callback(
+            transportType === 'uber'
+              ? '🚗 Cambiar a chofer'
+              : '📱 Cambiar a Uber',
+            `cambiar_transporte:${viajeId}:${transportType === 'uber' ? 'interno' : 'uber'}`,
+          ),
+        ]);
       }
 
       if (accept && servicio.cliente?.telegramChatId) {

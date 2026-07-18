@@ -272,7 +272,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
           },
         });
 
-        this.realtimeEventsService.emitToJefes({
+        this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
           type: 'trip_accepted',
           data: {
             tripId: trip.id,

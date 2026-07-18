@@ -584,6 +584,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         servicio: {
           empleada: { usuario: true },
           cliente: true,
+          jefe: true,
         },
       },
     });
@@ -669,6 +670,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       console.log(
         `[dispatchViaje] No hay choferes disponibles para el viaje ${viajeId}.`,
       );
+      await this.notifyNoDriversAvailable(viaje);
       return;
     }
 
@@ -765,6 +767,42 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     }, 120000);
     this.dispatchTimeouts.set(viajeId, timeout);
     console.log(`[dispatchViaje] Timeout establecido para viaje ${viajeId}`);
+  }
+
+  private async notifyNoDriversAvailable(viaje: Viajes): Promise<void> {
+    const event = {
+      type: 'no_drivers_available',
+      data: {
+        serviceId: viaje.servicioId,
+        tripId: viaje.id,
+        tripType: viaje.tipo,
+      },
+    };
+    this.realtimeEventsService.emitToBoss(viaje.servicio.jefeId, event);
+
+    const bossChatId = viaje.servicio.jefe?.telegramChatId;
+    if (!bossChatId) return;
+    await this.bot.telegram
+      .sendMessage(
+        bossChatId,
+        `⚠️ No se encontraron choferes disponibles para el viaje de ${viaje.tipo}. Puedes cambiar el método de transporte a Uber.`,
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '📱 Cambiar a Uber',
+                `cambiar_transporte:${viaje.id}:uber`,
+              ),
+            ],
+          ]),
+        },
+      )
+      .catch((error) =>
+        console.error(
+          `[dispatchViaje] No se pudo notificar al jefe del viaje ${viaje.id}:`,
+          error,
+        ),
+      );
   }
 
   async expirarOfertaYContinuar(
@@ -1170,6 +1208,146 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     link += `&dropoff[latitude]=${employee?.ubicacionLat}&dropoff[longitude]=${employee?.ubicacionLng}&dropoff[nickname]=Casa`;
     link += `&pickup[latitude]=${servicio.ubicacionClienteLat}&pickup[longitude]=${servicio.ubicacionClienteLng}&pickup[nickname]=Recoger%20Empleada`;
     return link;
+  }
+
+  async changeTripTransport(
+    tripId: string,
+    actorId: string,
+    provider: 'interno' | 'uber',
+  ): Promise<{ trip: Viajes; uberLink?: string }> {
+    const result = await this.serviciosRepository.manager.transaction(
+      async (manager) => {
+        const trip = await manager.findOne(Viajes, {
+          where: { id: tripId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!trip) throw new NotFoundException('Viaje no encontrado');
+
+        const [servicio, actor] = await Promise.all([
+          manager.findOneBy(Servicios, { id: trip.servicioId }),
+          manager.findOneBy(Usuarios, { id: actorId }),
+        ]);
+        if (!servicio) throw new NotFoundException('Servicio no encontrado');
+        if (
+          !actor ||
+          (actor.rol !== 'admin' &&
+            (actor.rol !== 'jefe' || servicio.jefeId !== actor.id))
+        ) {
+          throw new ConflictException('No puedes modificar este viaje');
+        }
+        if (!['notificado', 'aceptado', 'llegado'].includes(trip.estado)) {
+          throw new ConflictException(
+            'El transporte no puede cambiarse cuando el viaje está en curso o finalizado',
+          );
+        }
+        if (trip.choferId) {
+          throw new ConflictException(
+            'El transporte no puede cambiarse porque el viaje ya tiene un chofer asignado',
+          );
+        }
+        if (trip.proveedorTransporte === provider) {
+          throw new ConflictException(
+            `El viaje ya usa ${provider === 'uber' ? 'Uber' : 'chofer'}`,
+          );
+        }
+
+        trip.proveedorTransporte = provider;
+        trip.choferId = null;
+        trip.choferesNotificados = [];
+        trip.telegramChoferMsgOfertaId = null;
+        trip.telegramUberFileId = null;
+        trip.horaNotificacion = new Date();
+        trip.horaAceptacion = provider === 'uber' ? new Date() : null;
+        trip.horaInicioViaje = null;
+        trip.horaFinViaje = null;
+        trip.estado = provider === 'uber' ? 'aceptado' : 'notificado';
+        trip.tarifa = provider === 'uber' ? 0 : 50;
+        await manager.save(Viajes, trip);
+
+        if (trip.tipo === 'regreso') {
+          servicio.estadoLiquidacion =
+            provider === 'uber' ? 'transporte_pendiente' : 'cerrada';
+          await manager.save(Servicios, servicio);
+        }
+
+        return { trip, servicio };
+      },
+    );
+
+    this.clearDispatchTimeout(tripId);
+
+    const servicio = await this.serviciosRepository.findOne({
+      where: { id: result.servicio.id },
+      relations: { empleada: { usuario: true }, jefe: true },
+    });
+    if (!servicio) throw new NotFoundException('Servicio no encontrado');
+
+    let uberLink: string | undefined;
+    if (provider === 'interno') {
+      await this.dispatchViaje(result.trip.id);
+      if (result.trip.tipo === 'regreso') {
+        await this.sendFinalReceiptAndAward(servicio.id);
+      }
+    } else {
+      uberLink = this.buildUberLinkForTrip(servicio, result.trip.tipo);
+      const employeeChatId = servicio.empleada?.usuario?.telegramChatId;
+      if (employeeChatId) {
+        await this.bot.telegram
+          .sendMessage(
+            employeeChatId,
+            `El viaje de ${result.trip.tipo} cambió a Uber. Usa los botones para actualizar tu trayecto.`,
+            {
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    '🚗 Voy en camino',
+                    `eu:${result.trip.id}:i`,
+                  ),
+                  Markup.button.callback(
+                    '📍 Ya llegué',
+                    `eu:${result.trip.id}:f`,
+                  ),
+                ],
+              ]),
+            },
+          )
+          .catch(() => undefined);
+      }
+    }
+
+    this.realtimeEventsService.emitToBoss(servicio.jefeId, {
+      type: 'trip_transport_changed',
+      data: {
+        serviceId: servicio.id,
+        tripId: result.trip.id,
+        provider,
+      },
+    });
+    return { trip: result.trip, uberLink };
+  }
+
+  private buildUberLinkForTrip(
+    servicio: Servicios,
+    tripType: 'ida' | 'regreso',
+  ): string {
+    const ida = tripType === 'ida';
+    const pickupLat = ida
+      ? servicio.empleada?.ubicacionLat
+      : servicio.ubicacionClienteLat;
+    const pickupLng = ida
+      ? servicio.empleada?.ubicacionLng
+      : servicio.ubicacionClienteLng;
+    const dropoffLat = ida
+      ? servicio.ubicacionClienteLat
+      : servicio.empleada?.ubicacionLat;
+    const dropoffLng = ida
+      ? servicio.ubicacionClienteLng
+      : servicio.empleada?.ubicacionLng;
+    return (
+      'https://m.uber.com/ul/?action=setPickup' +
+      `&pickup[latitude]=${pickupLat}&pickup[longitude]=${pickupLng}` +
+      `&dropoff[latitude]=${dropoffLat}&dropoff[longitude]=${dropoffLng}`
+    );
   }
 
   async saveUberScreenshot(

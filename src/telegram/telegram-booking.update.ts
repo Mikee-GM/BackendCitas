@@ -54,6 +54,58 @@ interface BotContext extends Context {
   session?: SessionData;
 }
 
+export function isUberAdminInputSession(session?: { step?: string }): boolean {
+  return (
+    session?.step === 'AWAITING_UBER_SCREENSHOT' ||
+    session?.step === 'AWAITING_UBER_FARE_ACTION' ||
+    session?.step === 'AWAITING_UBER_FARE'
+  );
+}
+
+export function extractHireDuration(text: string): number | undefined {
+  const match = text.match(
+    /(?:^|\s)(\d+(?:[.,]\d+)?)\s*(?:h|hora|horas)?(?:\s|$)/i,
+  );
+  if (match) {
+    const duration = Number(match[1].replace(',', '.'));
+    return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+  }
+
+  const normalized = text.toLowerCase().trim();
+  const wordDurations: Record<string, number> = {
+    una: 1,
+    un: 1,
+    uno: 1,
+    dos: 2,
+    tres: 3,
+    cuatro: 4,
+    cinco: 5,
+    seis: 6,
+    siete: 7,
+    ocho: 8,
+    nueve: 9,
+    diez: 10,
+    once: 11,
+    doce: 12,
+  };
+  const word = Object.keys(wordDurations).find(
+    (candidate) =>
+      normalized === candidate ||
+      new RegExp(`\\b${candidate}\\s+horas?\\b`).test(normalized),
+  );
+  return word ? wordDurations[word] : undefined;
+}
+
+export function extractHirePaymentMethod(
+  text: string,
+): SessionData['metodoPago'] | undefined {
+  const normalized = text.toLowerCase();
+  if (/\befectivo\b/.test(normalized)) return 'efectivo';
+  if (/\btarjeta\b/.test(normalized)) return 'tarjeta';
+  if (/\btransferencia\b/.test(normalized)) return 'transferencia';
+  return undefined;
+}
+
 @Update()
 export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   private readonly logger = new Logger(TelegramBookingUpdate.name);
@@ -242,12 +294,12 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    if (!ctx.session) {
-      ctx.session = {};
-    }
-
-    ctx.session.step = 'CHAT_CON_EMPLEADA';
-    ctx.session.empleadaId = empleadaId;
+    // Cada contratación debe comenzar sin datos residuales de servicios,
+    // calificaciones o conversaciones anteriores.
+    ctx.session = {
+      step: 'CHAT_CON_EMPLEADA',
+      empleadaId,
+    };
 
     await ctx.reply(
       `Espere por favor, estamos poniéndonos en contacto con *${empleada.nombreArtistico}*...`,
@@ -374,7 +426,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     // Enviar el teclado nativo para compartir ubicación
-    await ctx.reply(clientMessages.locationRequest(), {
+    await this.replyWithLocationKeyboard(ctx, clientMessages.locationRequest());
+  }
+
+  private async replyWithLocationKeyboard(
+    ctx: BotContext,
+    text: string,
+  ): Promise<void> {
+    await ctx.reply(text, {
       parse_mode: 'Markdown',
       ...Markup.keyboard([
         [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
@@ -1568,7 +1627,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         relations: { cliente: true, empleada: true },
       });
       if (serviceWithRelations) {
-        this.realtimeEventsService.emitToJefes({
+        this.realtimeEventsService.emitToBoss(serviceWithRelations.jefeId, {
           type: 'service_requested',
           data: serviceWithRelations,
         });
@@ -1685,6 +1744,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
+    // Los pasos administrativos de Uber tienen su propio consumidor en
+    // TelegramAdminUpdate. No deben caer también en el puente jefe-cliente.
+    if (isUberAdminInputSession(ctx.session)) return;
+
     const text = (ctx.message as { text?: string })?.text || '';
     const cleanText = text.trim().toLowerCase();
 
@@ -2016,6 +2079,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       // Push the user's message to the history
       history.push({ role: 'user', parts: [{ text: userMessage }] });
 
+      session.duracionPactadaHoras ??= extractHireDuration(userMessage);
+      session.metodoPago ??= extractHirePaymentMethod(userMessage);
+
+      if (session.duracionPactadaHoras && session.metodoPago) {
+        session.step = 'AWAITING_LOCATION';
+        session.chatHistory = history;
+        await this.replyWithLocationKeyboard(
+          ctx,
+          clientMessages.locationRequest(),
+        );
+        return;
+      }
+
       const systemPrompt = getGeneralChatSystemPrompt({
         nombreArtistico: empleada.nombreArtistico,
         precioBaseHora: empleada.precioBaseHora,
@@ -2052,13 +2128,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               history.push({ role: 'model', parts: [{ text: responseText }] });
               session.chatHistory = history;
 
-              await ctx.reply(responseText, {
-                ...Markup.keyboard([
-                  [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
-                ])
-                  .oneTime()
-                  .resize(),
-              });
+              await this.replyWithLocationKeyboard(ctx, responseText);
               return;
             }
           } catch (jsonErr) {

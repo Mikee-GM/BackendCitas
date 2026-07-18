@@ -121,4 +121,93 @@ describe('ServicesService transport settlement', () => {
       keyboard.reply_markup.inline_keyboard[0][0].callback_data;
     expect(Buffer.byteLength(callbackData, 'utf8')).toBeLessThanOrEqual(64);
   });
+
+  it('cambia un viaje pendiente de chofer a Uber', async () => {
+    const trip = {
+      id: 'trip',
+      servicioId: 'service',
+      tipo: 'ida',
+      estado: 'notificado',
+      proveedorTransporte: 'interno',
+      choferId: null,
+      choferesNotificados: [],
+      telegramChoferMsgOfertaId: null,
+    };
+    const manager = {
+      findOne: jest.fn().mockResolvedValue(trip),
+      findOneBy: jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'service', jefeId: 'boss' })
+        .mockResolvedValueOnce({ id: 'boss', rol: 'jefe' }),
+      save: jest.fn().mockImplementation((_entity, value) => value),
+      update: jest.fn(),
+    };
+    (serviciosRepository as any).manager = {
+      transaction: jest.fn((callback) => callback(manager)),
+    };
+    serviciosRepository.findOne.mockResolvedValue({
+      id: 'service',
+      jefeId: 'boss',
+      ubicacionClienteLat: 1,
+      ubicacionClienteLng: 2,
+      empleada: { ubicacionLat: 3, ubicacionLng: 4, usuario: {} },
+      jefe: {},
+    });
+
+    const result = await service.changeTripTransport('trip', 'boss', 'uber');
+
+    expect(result.trip.proveedorTransporte).toBe('uber');
+    expect(result.trip.estado).toBe('aceptado');
+    expect(result.trip.tarifa).toBe(0);
+    expect(result.uberLink).toContain('pickup[latitude]=3');
+    expect(realtime.emitToBoss).toHaveBeenCalledWith(
+      'boss',
+      expect.objectContaining({ type: 'trip_transport_changed' }),
+    );
+  });
+
+  it('impide cambiar el transporte cuando el viaje está en curso', async () => {
+    const manager = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'trip',
+        servicioId: 'service',
+        estado: 'en_curso',
+        proveedorTransporte: 'interno',
+      }),
+      findOneBy: jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'service', jefeId: 'boss' })
+        .mockResolvedValueOnce({ id: 'boss', rol: 'jefe' }),
+    };
+    (serviciosRepository as any).manager = {
+      transaction: jest.fn((callback) => callback(manager)),
+    };
+
+    await expect(
+      service.changeTripTransport('trip', 'boss', 'uber'),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('impide cambiar el transporte si ya existe un chofer asignado', async () => {
+    const manager = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'trip',
+        servicioId: 'service',
+        estado: 'notificado',
+        proveedorTransporte: 'interno',
+        choferId: 'driver',
+      }),
+      findOneBy: jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'service', jefeId: 'boss' })
+        .mockResolvedValueOnce({ id: 'boss', rol: 'jefe' }),
+    };
+    (serviciosRepository as any).manager = {
+      transaction: jest.fn((callback) => callback(manager)),
+    };
+
+    await expect(
+      service.changeTripTransport('trip', 'boss', 'uber'),
+    ).rejects.toThrow('el viaje ya tiene un chofer asignado');
+  });
 });

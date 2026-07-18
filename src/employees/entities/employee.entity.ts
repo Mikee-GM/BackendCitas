@@ -94,6 +94,23 @@ export class Empleadas {
   @ApiProperty({ description: 'Catalogo Activo', example: true })
   catalogoActivo: boolean;
 
+  @Column('integer', { name: 'total_servicios_valorados', default: 0 })
+  @ApiProperty({ description: 'Total de servicios valorados', example: 12 })
+  totalServiciosValorados: number;
+
+  @Column('numeric', {
+    name: 'promedio_calificacion',
+    nullable: true,
+    precision: 3,
+    scale: 2,
+    transformer: new ColumnNumericTransformer(),
+  })
+  @ApiPropertyOptional({
+    description: 'Promedio de calificaciones de servicios finalizados',
+    example: 4.75,
+  })
+  promedioCalificacion: number | null;
+
   @Column('numeric', {
     name: 'ubicacion_lat',
     nullable: true,

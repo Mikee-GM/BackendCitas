@@ -161,6 +161,19 @@ export class ServicesController {
     );
   }
 
+  @Patch('trips/:tripId/transport')
+  changeTripTransport(
+    @Param('tripId') tripId: string,
+    @Body() dto: SelectTransportDto,
+    @Req() req: any,
+  ) {
+    return this.servicesService.changeTripTransport(
+      tripId,
+      req.user.id,
+      dto.transportType === 'chofer' ? 'interno' : 'uber',
+    );
+  }
+
   @Patch('trips/:tripId/uber-status')
   updateUberStatus(
     @Param('tripId') tripId: string,
