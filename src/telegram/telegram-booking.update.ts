@@ -29,6 +29,7 @@ import {
   getGeneralChatSystemPrompt,
   getSentimentPrompt,
 } from '../ai/prompts/prompts';
+import { clientMessages } from './client-messages';
 
 interface SessionData {
   step?:
@@ -458,7 +459,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     ctx.session.step = 'AWAITING_LOCATION_ENCADENADO';
 
     await ctx.reply(
-      `✅ Método de pago: *${metodo.toUpperCase()}*.\n\n📍 Por último, comparte tu ubicación:`,
+      clientMessages.paymentAndLocation(
+        ctx.session.duracionPactadaHoras || 0,
+        metodo,
+      ),
       {
         parse_mode: 'Markdown',
         ...Markup.keyboard([
@@ -534,9 +538,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     try {
       // Editar el mensaje para remover los botones inline de pago
       await ctx.editMessageText(
-        `⏱️ Duración registrada: *${ctx.session.duracionPactadaHoras} horas*.\n` +
-          `✅ Método de pago seleccionado: *${metodo.toUpperCase()}*.\n\n` +
-          `📍 Siguiente paso: Compartir ubicación.`,
+        clientMessages.paymentAndLocation(
+          ctx.session.duracionPactadaHoras,
+          metodo,
+        ),
         { parse_mode: 'Markdown' },
       );
     } catch (err) {
@@ -545,8 +550,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     // Enviar el teclado nativo para compartir ubicación
     await ctx.reply(
-      `📍 Por último, necesitamos tu ubicación para registrar el servicio.\n` +
-        `Por favor, presiona el botón de abajo para compartir tu ubicación de manera segura:`,
+      clientMessages.locationRequest(),
       {
         parse_mode: 'Markdown',
         ...Markup.keyboard([
@@ -1029,8 +1033,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
 
       const resumenCliText =
-        `🏁 *¡Tu servicio ha finalizado!* 🍰\n\n` +
-        `📝 *Resumen de tu Servicio:*\n` +
+        `🏁 *Gracias por compartir este rato conmigo.*\n\n` +
+        `Te dejo el resumen de nuestro servicio:\n` +
         `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
         `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
         `• *Duración Real:* ${duracionFormatted}\n` +
@@ -1119,9 +1123,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         try {
           await ctx.telegram.sendMessage(
             enc.cliente.telegramChatId,
-            `🟢 *¡Tu turno está activo!*\n\n` +
-              `La empleada *${servicio.empleada?.nombreArtistico || ''}* acaba de quedar libre.\n` +
-              `Tu servicio ha pasado a lista de espera de aprobación. Pronto un administrador lo confirmará.`,
+            clientMessages.chainedTurnActive(
+              enc.empleada?.nombreArtistico || '',
+            ),
             { parse_mode: 'Markdown' },
           );
         } catch (tgErr) {
@@ -1615,20 +1619,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
         ctx.session = {};
 
-        let msgEnc =
-          `📅 *¡Cita Encadenada Registrada!*\n\n` +
-          `📝 *Resumen:*\n` +
-          `• *Empleada:* ${empleada.nombreArtistico}\n` +
-          `• *Duración:* ${duracionPactadaHoras} horas\n` +
-          `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
-          `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
-          `• *Inicio estimado:* ${horaEstimadaStr}\n\n` +
-          `⏳ Tu cita está en la lista de espera. Te avisaremos tan pronto la empleada quede libre.\n` +
-          `Puedes cancelar esta reserva presionando el botón de abajo:`;
-
-        if (notasUbicacionSafe) {
-          msgEnc += `\n• *Ubicación:* ${notasUbicacionSafe}`;
-        }
+        const msgEnc = clientMessages.chainedBookingConfirmed({
+          duration: duracionPactadaHoras,
+          payment: metodoPago,
+          hourlyRate: empleada.precioBaseHora,
+          estimatedStart: horaEstimadaStr,
+          location: notasUbicacionSafe,
+        });
 
         const msgEnviadoEnc = await ctx.reply(msgEnc, {
           parse_mode: 'Markdown',
@@ -1758,20 +1755,12 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
       ctx.session = {};
 
-      let msgExito =
-        `🎉 *¡Servicio Solicitado con Éxito!*\n\n` +
-        `📝 *Resumen del Servicio:*\n` +
-        `• *Empleada:* ${empleada.nombreArtistico}\n` +
-        `• *Duración:* ${duracionPactadaHoras} horas\n` +
-        `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
-        `• *Tarifa Pactada:* $${empleada.precioBaseHora}/hr\n` +
-        `• *Estado:* Pendiente de aprobación\n`;
-
-      if (notasUbicacionSafe) {
-        msgExito += `• *Ubicación:* ${notasUbicacionSafe}\n`;
-      }
-
-      msgExito += `\nPronto un administrador se pondrá en contacto contigo. ¡Gracias por tu preferencia!`;
+      const msgExito = clientMessages.bookingConfirmed({
+        duration: duracionPactadaHoras,
+        payment: metodoPago,
+        hourlyRate: empleada.precioBaseHora,
+        location: notasUbicacionSafe,
+      });
 
       const msg = await ctx.reply(msgExito, {
         parse_mode: 'Markdown',
@@ -1878,10 +1867,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         try {
           await ctx.telegram.sendMessage(
             enc.cliente.telegramChatId,
-            `⚠️ *Actualización de tu Cita Reservada*\n\n` +
-              `La empleada *${servicio.empleada?.nombreArtistico || ''}* extendió su servicio actual.\n` +
-              `• Nueva hora de inicio estimada para tu cita: *${horaEstimadaStr}*\n\n` +
-              `Te avisaremos cuando esté lista para atenderte.`,
+            clientMessages.chainedTimeUpdated(
+              servicio.empleada?.nombreArtistico || '',
+              horaEstimadaStr,
+            ),
             { parse_mode: 'Markdown' },
           );
         } catch (tgErr) {
@@ -2315,8 +2304,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               await ctx.sendChatAction('typing');
               await new Promise((resolve) => setTimeout(resolve, 1500));
               await ctx.reply(
-                `📍 *¡Excelente! Ya tengo los detalles anotados (Duración: ${parsedData.duracion} horas, Pago: ${parsedData.pago.toUpperCase()}).*\n\n` +
-                  `Por último, ¿me compartes tu ubicación con el botón de abajo para registrar tu pedido?`,
+                clientMessages.paymentAndLocation(
+                  parsedData.duracion,
+                  parsedData.pago,
+                ),
                 {
                   parse_mode: 'Markdown',
                   ...Markup.keyboard([

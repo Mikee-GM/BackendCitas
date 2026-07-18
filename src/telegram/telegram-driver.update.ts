@@ -10,6 +10,7 @@ import { Choferes } from '../drivers/entities/driver.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { Servicios } from '../services/entities/service.entity';
+import { clientMessages } from './client-messages';
 
 interface DriverCacheEntry {
   userId: string;
@@ -927,8 +928,10 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
       try {
         await ctx.telegram.sendMessage(
           trip.servicio.cliente.telegramChatId,
-          `🚗 *¡Tu servicio va en camino!* 💨\n\n` +
-            `El chofer *${chofer.nombre}* ha recogido a *${trip.servicio.empleada.nombreArtistico}* y van rumbo a tu ubicación.`,
+          clientMessages.onTheWay(
+            trip.servicio.empleada.nombreArtistico,
+            chofer.nombre,
+          ),
           { parse_mode: 'Markdown' },
         );
       } catch (telegramErr) {
@@ -1213,8 +1216,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
       try {
         await ctx.telegram.sendMessage(
           trip.servicio.cliente.telegramChatId,
-          `📍 *¡Tu empleada ha llegado!* 🙋‍♀️\n\n` +
-            `*${trip.servicio.empleada.nombreArtistico}* ha llegado a tu ubicación para iniciar el servicio.`,
+          clientMessages.arrived(trip.servicio.empleada.nombreArtistico),
           { parse_mode: 'Markdown' },
         );
       } catch (telegramErr) {
