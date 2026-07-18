@@ -295,9 +295,43 @@ export class LoyaltyService implements OnModuleInit {
       );
 
       if (existing) {
+        const amount = Number(service.totalFinal ?? 0);
+        const previousAmount = Number(existing.amountBasis ?? 0);
+        const nextPoints = Math.max(
+          0,
+          Math.floor(amount * membership.tier.earnRate),
+        );
+        const pointsDelta = nextPoints - existing.points;
+        const amountDelta = amount - previousAmount;
+
+        membership.pointsBalance = Math.max(
+          0,
+          membership.pointsBalance + pointsDelta,
+        );
+        membership.lifetimePoints = Math.max(
+          0,
+          membership.lifetimePoints + pointsDelta,
+        );
+        membership.lifetimeSpend = Math.max(
+          0,
+          Number(membership.lifetimeSpend) + amountDelta,
+        );
+        if (membership.assignmentType === 'automatic') {
+          const nextTier = await this.findTierForSpend(
+            membership.lifetimeSpend,
+            manager,
+          );
+          membership.tierId = nextTier.id;
+          membership.tier = nextTier;
+        }
+        membership.updatedAt = new Date();
+        existing.points = nextPoints;
+        existing.amountBasis = amount;
+        await manager.save(ClientMembership, membership);
+        await manager.save(LoyaltyTransaction, existing);
         return {
           duplicate: true,
-          pointsEarned: existing.points,
+          pointsEarned: nextPoints,
           pointsBalance: membership.pointsBalance,
           tier: membership.tier,
         };

@@ -2,6 +2,7 @@ import {
   extractHireDuration,
   extractHirePaymentMethod,
   isUberAdminInputSession,
+  parseUberFareInput,
 } from './telegram-booking.update';
 
 describe('Telegram booking session input parsing', () => {
@@ -46,4 +47,19 @@ describe('Telegram booking session input parsing', () => {
     expect(isUberAdminInputSession({ step: 'CHAT_CON_EMPLEADA' })).toBe(false);
     expect(isUberAdminInputSession(undefined)).toBe(false);
   });
+
+  it.each([
+    ['185', 185],
+    ['185.50', 185.5],
+    ['185,5', 185.5],
+  ])('parses the Uber fare %s', (text, expected) => {
+    expect(parseUberFareInput(text)).toBe(expected);
+  });
+
+  it.each(['0', '-20', '185.555', 'abc'])(
+    'rejects the invalid Uber fare %s',
+    (text) => {
+      expect(parseUberFareInput(text)).toBeUndefined();
+    },
+  );
 });

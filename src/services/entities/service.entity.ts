@@ -171,11 +171,11 @@ export class Servicios {
   estadoLiquidacion: 'transporte_pendiente' | 'cerrada';
 
   @Column('varchar', {
-    name: 'telegram_resumen_provisional_id',
+    name: 'telegram_resumen_definitivo_id',
     nullable: true,
   })
-  @ApiPropertyOptional({ description: 'Mensaje provisional del cliente' })
-  telegramResumenProvisionalId: string | null;
+  @ApiPropertyOptional({ description: 'Mensaje definitivo del cliente' })
+  telegramResumenDefinitivoId: string | null;
 
   @Column('smallint', { name: 'recordatorios_regreso', default: () => '0' })
   @ApiProperty({ description: 'Recordatorios de transporte de regreso' })

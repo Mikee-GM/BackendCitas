@@ -47,7 +47,7 @@ describe('ServicesService transport settlement', () => {
     expect(viajesRepository.update).not.toHaveBeenCalled();
   });
 
-  it('reemplaza la tarifa del regreso y cierra la liquidación', async () => {
+  it('reemplaza la tarifa del regreso sin cerrar la liquidación', async () => {
     viajesRepository.findOne.mockResolvedValue({
       id: 'trip',
       tipo: 'regreso',
@@ -67,9 +67,7 @@ describe('ServicesService transport settlement', () => {
     expect(viajesRepository.update).toHaveBeenCalledWith('trip', {
       tarifa: 185.5,
     });
-    expect(serviciosRepository.update).toHaveBeenCalledWith('service', {
-      estadoLiquidacion: 'cerrada',
-    });
+    expect(serviciosRepository.update).not.toHaveBeenCalled();
     expect(service.sendFinalReceiptAndAward).toHaveBeenCalledWith('service');
   });
 
@@ -94,10 +92,10 @@ describe('ServicesService transport settlement', () => {
     expect(viajesRepository.update).not.toHaveBeenCalled();
   });
 
-  it('permite al jefe marcar que el Uber llegó sin depender del estado previo', async () => {
+  it('permite al jefe marcar que el Uber llegó después de ir en camino', async () => {
     viajesRepository.findOne.mockResolvedValue({
       id: 'trip',
-      estado: 'notificado',
+      estado: 'en_camino',
       proveedorTransporte: 'uber',
       servicioId: 'service',
       servicio: {
@@ -120,6 +118,53 @@ describe('ServicesService transport settlement', () => {
     const callbackData =
       keyboard.reply_markup.inline_keyboard[0][0].callback_data;
     expect(Buffer.byteLength(callbackData, 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('exige tarifa antes de marcar el Uber en camino', async () => {
+    viajesRepository.findOne.mockResolvedValue({
+      id: 'trip',
+      estado: 'aceptado',
+      tarifa: 0,
+      proveedorTransporte: 'uber',
+      servicio: { jefeId: 'boss', empleada: { usuario: {} } },
+    });
+    usuariosRepository.findOneBy.mockResolvedValue({ id: 'boss', rol: 'jefe' });
+
+    await expect(
+      service.updateUberStatus('trip', 'boss', 'uber_en_route'),
+    ).rejects.toThrow('Primero registra la tarifa');
+    expect(viajesRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('cierra el regreso solamente cuando la empleada confirma su llegada', async () => {
+    viajesRepository.findOne.mockResolvedValue({
+      id: 'trip',
+      servicioId: 'service',
+      tipo: 'regreso',
+      estado: 'en_curso',
+      proveedorTransporte: 'uber',
+      servicio: {
+        jefeId: 'boss',
+        clienteId: 'client',
+        empleadaId: 'employee',
+        empleada: { usuarioId: 'employee-user', usuario: {} },
+      },
+    });
+    usuariosRepository.findOneBy.mockResolvedValue({
+      id: 'employee-user',
+      rol: 'empleada',
+    });
+
+    await service.updateUberStatus('trip', 'employee-user', 'employee_arrived');
+
+    expect(viajesRepository.update).toHaveBeenCalledWith(
+      'trip',
+      expect.objectContaining({ estado: 'finalizado' }),
+    );
+    expect(serviciosRepository.update).toHaveBeenCalledWith(
+      'service',
+      expect.objectContaining({ estadoLiquidacion: 'cerrada' }),
+    );
   });
 
   it('cambia un viaje pendiente de chofer a Uber', async () => {

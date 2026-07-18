@@ -38,11 +38,16 @@ interface SessionData {
     | 'AWAITING_PAYMENT_METHOD'
     | 'AWAITING_LOCATION'
     | 'AWAITING_RATING_COMMENT'
+    | 'AWAITING_UBER_SCREENSHOT'
+    | 'AWAITING_UBER_FARE_ACTION'
+    | 'AWAITING_UBER_FARE'
     | 'CHAT_CON_EMPLEADA';
   empleadaId?: string;
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
   servicioIdCalificacion?: string;
+  uberTripId?: string;
+  pendingUberFare?: number;
   chatHistory?: { role: 'user' | 'model'; parts: { text: string }[] }[];
   extraSelection?: {
     servicioId: string;
@@ -60,6 +65,13 @@ export function isUberAdminInputSession(session?: { step?: string }): boolean {
     session?.step === 'AWAITING_UBER_FARE_ACTION' ||
     session?.step === 'AWAITING_UBER_FARE'
   );
+}
+
+export function parseUberFareInput(text: string): number | undefined {
+  const normalized = text.trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return undefined;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? amount : undefined;
 }
 
 export function extractHireDuration(text: string): number | undefined {
@@ -801,11 +813,16 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         match[2] === 'f' ? 'Llegada registrada' : 'Cliente notificado',
       );
       if (match[2] === 'i') {
-        await ctx.reply('Cuando llegues al destino, confirma tu llegada.', {
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('📍 Ya llegué', `eu:${match[1]}:f`)],
-          ]),
-        });
+        await ctx.editMessageText(
+          'Cuando llegues al destino, confirma tu llegada.',
+          {
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('📍 Ya llegué', `eu:${match[1]}:f`)],
+            ]),
+          },
+        );
+      } else {
+        await ctx.editMessageText('✅ Tu llegada al destino quedó registrada.');
       }
     } catch (error: any) {
       await ctx.answerCbQuery(error.message, { show_alert: true });
@@ -902,57 +919,17 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
 
-    // Volver a cargar para obtener totales calculados por triggers
-    const servicioActualizado = await this.serviciosRepository.findOne({
-      where: { id: servicioId },
-      relations: {
-        cliente: true,
-        empleada: { usuario: true, jefe: true },
-        jefe: true,
-        extrasServicios: { extraCatalogo: true },
-      },
-    });
-
-    const total =
-      servicioActualizado?.totalFinal || servicio.totalFinal || '0.00';
-
-    const extrasList = servicioActualizado?.extrasServicios || [];
-    const totalExtras = extrasList
-      .reduce((sum, e) => sum + Number(e.precioCobrado), 0)
-      .toFixed(2);
-
-    let extrasBreakdownStr = '';
-    if (extrasList.length > 0) {
-      extrasBreakdownStr =
-        `\n🎁 *Servicios Extras (${extrasList.length}):* $${totalExtras}\n` +
-        extrasList
-          .map(
-            (e) =>
-              `  - ${e.extraCatalogo?.nombre || 'Extra'}: $${e.precioCobrado} (${e.metodoPago.toUpperCase()})`,
-          )
-          .join('\n') +
-        '\n';
-    }
-
-    // 1. Editar el mensaje del botón "Finalizar Servicio" con el resumen del servicio
+    // El importe aún no es definitivo: falta definir el transporte de regreso.
     const resumenEmpText =
-      `✅ *¡Servicio Finalizado!* 🏁\n\n` +
-      `📝 *Resumen del Servicio:*\n` +
+      `✅ *Actividad con el cliente finalizada*\n\n` +
       `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-      `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
       `• *Duración Real:* ${duracionFormatted}\n` +
-      `• *Total Cobrado del Servicio:* $${total}\n` +
-      `• *Método de Pago Servicio:* ${servicio.metodoPago.toUpperCase()}\n` +
-      (extrasBreakdownStr
-        ? `${extrasBreakdownStr}\n*(Nota: Las ganancias de extras van directo a ti)*`
-        : '') +
-      `\n\n` +
-      `¡Excelente trabajo! 🎉`;
+      `\nEl monto definitivo se mostrará cuando se confirme el transporte de regreso.`;
 
     try {
       await ctx.editMessageText(resumenEmpText, { parse_mode: 'Markdown' });
     } catch (err) {
-      console.error('Error al editar mensaje de resumen de la empleada:', err);
+      console.error('Error al editar mensaje de cierre de actividad:', err);
     }
 
     // 2. Limpieza de chat del cliente (Eliminar mensaje anterior)
@@ -964,75 +941,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         );
       } catch (err) {
         console.error('Error al eliminar mensaje del cliente:', err);
-      }
-    }
-
-    // 3. Enviar mensaje de resumen y solicitar calificación al cliente
-    if (servicio.cliente?.telegramChatId) {
-      let clientExtrasStr = '';
-      if (extrasList.length > 0) {
-        clientExtrasStr =
-          `• *Servicios Extras (A pagar a la empleada):* $${totalExtras}\n` +
-          extrasList
-            .map(
-              (e) =>
-                `  - ${e.extraCatalogo?.nombre || 'Extra'}: $${e.precioCobrado} (${e.metodoPago.toUpperCase()})`,
-            )
-            .join('\n') +
-          '\n';
-      }
-
-      const resumenCliText =
-        `🏁 *Gracias por compartir este rato conmigo.*\n\n` +
-        `Te dejo el resumen provisional de nuestro servicio:\n` +
-        `• *Empleada:* ${servicio.empleada?.nombreArtistico || 'N/A'}\n` +
-        `• *Duración Pactada:* ${servicio.duracionPactadaHoras} horas\n` +
-        `• *Duración Real:* ${duracionFormatted}\n` +
-        `• *Subtotal actual:* $${total}\n` +
-        `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n` +
-        (clientExtrasStr ? `${clientExtrasStr}` : '') +
-        `\n⏳ Falta incorporar el costo del transporte de regreso. Te enviaré el total definitivo y la calificación cuando quede confirmado.`;
-
-      const duracionPactadaVal = servicio.duracionPactadaHoras;
-      const finalizoAntes = duracionRealVal < duracionPactadaVal;
-
-      const inlineButtons: any[] = [];
-
-      const jefeEncargado = servicio.empleada?.jefe || servicio.jefe;
-      if (finalizoAntes && jefeEncargado?.telefono) {
-        const cleanPhone = jefeEncargado.telefono.replace(/[^0-9]/g, '');
-        const messageText =
-          `Hola, soy el cliente ${servicio.cliente?.nombreTelegram || ''}.\n` +
-          `Quiero contactar con soporte sobre mi servicio:\n` +
-          `• ID del Servicio: ${servicio.id}\n` +
-          `• Empleada: ${servicio.empleada?.nombreArtistico || ''}\n` +
-          `• Hora de inicio: ${servicio.horaInicioServicio ? new Date(servicio.horaInicioServicio).toLocaleString() : ''}\n` +
-          `• Hora de fin: ${fin.toLocaleString()}\n` +
-          `• Tiempo total: ${duracionFormatted}\n` +
-          `• Horas pactadas originalmente: ${servicio.duracionPactadaHoras} horas`;
-
-        const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`;
-        inlineButtons.push([Markup.button.url('📞 Contactar Soporte', waUrl)]);
-      }
-
-      try {
-        const provisionalMessage = await ctx.telegram.sendMessage(
-          servicio.cliente.telegramChatId,
-          resumenCliText,
-          {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard(inlineButtons),
-          },
-        );
-        await this.serviciosRepository.update(servicio.id, {
-          telegramResumenProvisionalId:
-            provisionalMessage.message_id.toString(),
-        });
-      } catch (err) {
-        console.error(
-          'Error al notificar al cliente del fin de servicio:',
-          err,
-        );
       }
     }
 
@@ -1744,8 +1652,49 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
-    // Los pasos administrativos de Uber tienen su propio consumidor en
-    // TelegramAdminUpdate. No deben caer también en el puente jefe-cliente.
+    if (ctx.session?.step === 'AWAITING_UBER_FARE') {
+      const text = (ctx.message as { text?: string })?.text || '';
+      const amount = parseUberFareInput(text);
+      if (!amount) {
+        await ctx.reply(
+          '❌ Escribe una cantidad positiva con máximo dos decimales.',
+        );
+        return;
+      }
+      if (!ctx.session.uberTripId) {
+        ctx.session = {};
+        await ctx.reply(
+          'La sesión de tarifa expiró. Pulsa nuevamente “Introducir tarifa”.',
+        );
+        return;
+      }
+      ctx.session.pendingUberFare = amount;
+      await ctx.reply(`Confirma el costo del Uber: *$${amount.toFixed(2)}*`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '✅ Confirmar',
+              `uber_fare_confirm:${ctx.session.uberTripId}`,
+            ),
+          ],
+          [
+            Markup.button.callback(
+              '✏️ Corregir',
+              `uber_fare_correct:${ctx.session.uberTripId}`,
+            ),
+            Markup.button.callback(
+              '❌ Cancelar',
+              `uber_fare_cancel:${ctx.session.uberTripId}`,
+            ),
+          ],
+        ]),
+      });
+      return;
+    }
+
+    // Los demás pasos administrativos tampoco deben caer en el puente
+    // general entre el jefe y el cliente.
     if (isUberAdminInputSession(ctx.session)) return;
 
     const text = (ctx.message as { text?: string })?.text || '';

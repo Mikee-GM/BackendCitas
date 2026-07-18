@@ -1168,7 +1168,6 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
           }),
         );
         servicio.proximoRecordatorioRegresoAt = null;
-        if (provider === 'interno') servicio.estadoLiquidacion = 'cerrada';
         await manager.save(Servicios, servicio);
 
         // Keep the row lock query free of outer joins. PostgreSQL cannot apply
@@ -1265,8 +1264,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         await manager.save(Viajes, trip);
 
         if (trip.tipo === 'regreso') {
-          servicio.estadoLiquidacion =
-            provider === 'uber' ? 'transporte_pendiente' : 'cerrada';
+          servicio.estadoLiquidacion = 'transporte_pendiente';
           await manager.save(Servicios, servicio);
         }
 
@@ -1411,11 +1409,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const trip = await this.getAuthorizedUberTrip(tripId, actorId);
+    if (['en_curso', 'finalizado', 'cancelado'].includes(trip.estado)) {
+      throw new ConflictException(
+        'La tarifa no puede cambiarse cuando el viaje ya inició',
+      );
+    }
     await this.viajesRepository.update(trip.id, { tarifa: amount });
     if (trip.tipo === 'regreso') {
-      await this.serviciosRepository.update(trip.servicioId, {
-        estadoLiquidacion: 'cerrada',
-      });
       await this.sendFinalReceiptAndAward(trip.servicioId);
     }
     const updated = await this.serviciosRepository.findOneBy({
@@ -1457,9 +1457,9 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
   async sendFinalReceiptAndAward(servicioId: string): Promise<void> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id: servicioId },
-      relations: { cliente: true, empleada: true },
+      relations: { cliente: true, empleada: { usuario: true } },
     });
-    if (!servicio || servicio.estadoLiquidacion !== 'cerrada') return;
+    if (!servicio || servicio.estado !== 'finalizado') return;
     const award =
       await this.loyaltyService.awardForFinalizedService(servicioId);
     const text =
@@ -1479,16 +1479,16 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         ]),
       );
       try {
-        if (servicio.telegramResumenProvisionalId) {
+        if (servicio.telegramResumenDefinitivoId) {
           await this.bot.telegram.editMessageText(
             servicio.cliente.telegramChatId,
-            Number(servicio.telegramResumenProvisionalId),
+            Number(servicio.telegramResumenDefinitivoId),
             undefined,
             text,
             { parse_mode: 'Markdown', ...keyboard },
           );
         } else {
-          await this.bot.telegram.sendMessage(
+          const message = await this.bot.telegram.sendMessage(
             servicio.cliente.telegramChatId,
             text,
             {
@@ -1496,9 +1496,12 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
               ...keyboard,
             },
           );
+          await this.serviciosRepository.update(servicio.id, {
+            telegramResumenDefinitivoId: message.message_id.toString(),
+          });
         }
       } catch {
-        await this.bot.telegram.sendMessage(
+        const message = await this.bot.telegram.sendMessage(
           servicio.cliente.telegramChatId,
           text,
           {
@@ -1506,6 +1509,47 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             ...keyboard,
           },
         );
+        await this.serviciosRepository.update(servicio.id, {
+          telegramResumenDefinitivoId: message.message_id.toString(),
+        });
+      }
+    }
+
+    const employeeChatId = servicio.empleada?.usuario?.telegramChatId;
+    if (employeeChatId) {
+      const employeeText =
+        `✅ *Monto definitivo del servicio*\n\n` +
+        `• Servicio base: $${Number(servicio.totalBase).toFixed(2)}\n` +
+        `• Transporte: $${Number(servicio.totalTransporte).toFixed(2)}\n` +
+        `• *Total a cobrar: $${Number(servicio.totalFinal).toFixed(2)}*`;
+      try {
+        if (servicio.telegramEmpleadaMensajeId) {
+          await this.bot.telegram.editMessageText(
+            employeeChatId,
+            Number(servicio.telegramEmpleadaMensajeId),
+            undefined,
+            employeeText,
+            { parse_mode: 'Markdown' },
+          );
+        } else {
+          const message = await this.bot.telegram.sendMessage(
+            employeeChatId,
+            employeeText,
+            { parse_mode: 'Markdown' },
+          );
+          await this.serviciosRepository.update(servicio.id, {
+            telegramEmpleadaMensajeId: message.message_id.toString(),
+          });
+        }
+      } catch {
+        const message = await this.bot.telegram.sendMessage(
+          employeeChatId,
+          employeeText,
+          { parse_mode: 'Markdown' },
+        );
+        await this.serviciosRepository.update(servicio.id, {
+          telegramEmpleadaMensajeId: message.message_id.toString(),
+        });
       }
     }
     this.realtimeEventsService.emitToClient(servicio.clienteId, {
@@ -1559,28 +1603,49 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    if (action === 'uber_arrived') {
-      await this.viajesRepository.update(trip.id, { estado: 'llegado' });
+    let resultingState = trip.estado;
+    if (action === 'uber_en_route') {
+      if (trip.estado !== 'aceptado') {
+        throw new ConflictException('El Uber ya no puede marcarse en camino');
+      }
+      if (Number(trip.tarifa) <= 0) {
+        throw new ConflictException('Primero registra la tarifa del Uber');
+      }
+      resultingState = 'en_camino';
+      await this.viajesRepository.update(trip.id, {
+        estado: resultingState,
+      });
+    } else if (action === 'uber_arrived') {
+      if (trip.estado !== 'en_camino') {
+        throw new ConflictException(
+          'Primero confirma que el Uber va en camino',
+        );
+      }
+      resultingState = 'llegado';
+      await this.viajesRepository.update(trip.id, { estado: resultingState });
     } else if (action === 'employee_en_route') {
       if (trip.estado !== 'llegado')
         throw new ConflictException(
           'Primero el jefe debe confirmar que el Uber llegó',
         );
+      resultingState = 'en_curso';
       await this.viajesRepository.update(trip.id, {
-        estado: 'en_curso',
+        estado: resultingState,
         horaInicioViaje: new Date(),
       });
     } else if (action === 'employee_arrived') {
       if (trip.estado !== 'en_curso')
         throw new ConflictException('Primero confirma que vas en camino');
       const now = new Date();
+      resultingState = 'finalizado';
       await this.viajesRepository.update(trip.id, {
-        estado: 'finalizado',
+        estado: resultingState,
         horaFinViaje: now,
       });
       if (trip.tipo === 'regreso') {
         await this.serviciosRepository.update(trip.servicioId, {
           horaLlegadaCasa: now,
+          estadoLiquidacion: 'cerrada',
         });
       }
     }
@@ -1589,12 +1654,19 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     if (bossAction && employeeChatId) {
       const message =
         action === 'uber_arrived'
-          ? '📍 Tu Uber ya llegó. Cuando subas, presiona “Voy en camino”.'
+          ? '📍 Tu Uber ya llegó. Cuando subas, presiona “Ya estoy en el Uber”.'
           : '🚗 Tu Uber va en camino a recogerte.';
       await this.bot.telegram.sendMessage(employeeChatId, message, {
         ...Markup.inlineKeyboard(
           action === 'uber_arrived'
-            ? [[Markup.button.callback('🚗 Voy en camino', `eu:${trip.id}:i`)]]
+            ? [
+                [
+                  Markup.button.callback(
+                    '🚗 Ya estoy en el Uber',
+                    `eu:${trip.id}:i`,
+                  ),
+                ],
+              ]
             : [],
         ),
       });
@@ -1620,9 +1692,43 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         data: { tripId: trip.id, serviceId: trip.servicioId },
       });
     }
+    if (action === 'employee_arrived' && trip.tipo === 'regreso') {
+      if (trip.servicio.cliente?.telegramChatId) {
+        await this.bot.telegram
+          .sendMessage(
+            trip.servicio.cliente.telegramChatId,
+            'El servicio quedó completado: la empleada llegó a su destino.',
+          )
+          .catch(() => undefined);
+      }
+      this.realtimeEventsService.emitToClient(trip.servicio.clienteId, {
+        type: 'service_fully_completed',
+        data: { serviceId: trip.servicioId, tripId: trip.id },
+      });
+    }
+    if (!bossAction) {
+      const bossChatId = trip.servicio.jefe?.telegramChatId;
+      if (bossChatId) {
+        const employeeName =
+          trip.servicio.empleada?.nombreArtistico || 'La empleada';
+        const message =
+          action === 'employee_arrived'
+            ? `La empleada ${employeeName} confirmó que llegó al destino del viaje de ${trip.tipo}.`
+            : `La empleada ${employeeName} confirmó que ya está dentro del Uber de ${trip.tipo}.`;
+        await this.bot.telegram
+          .sendMessage(bossChatId, message)
+          .catch(() => undefined);
+      }
+    }
     this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
       type: 'trip_status_updated',
-      data: { serviceId: trip.servicioId, tripId: trip.id, action },
+      data: {
+        serviceId: trip.servicioId,
+        tripId: trip.id,
+        action,
+        state: resultingState,
+        tripType: trip.tipo,
+      },
     });
   }
 }

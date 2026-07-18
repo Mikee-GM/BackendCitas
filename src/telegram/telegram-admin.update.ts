@@ -284,44 +284,6 @@ export class TelegramAdminUpdate {
     );
   }
 
-  @On('text')
-  async onUberFareText(@Ctx() ctx: Context) {
-    const session = (ctx as any).session;
-    if (session?.step !== 'AWAITING_UBER_FARE') return;
-    const raw = ((ctx.message as any)?.text || '').trim().replace(',', '.');
-    if (!/^\d+(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) {
-      await ctx.reply(
-        '❌ Escribe una cantidad positiva con máximo dos decimales.',
-      );
-      return;
-    }
-    session.pendingUberFare = Number(raw);
-    await ctx.reply(
-      `Confirma el costo del Uber: *$${Number(raw).toFixed(2)}*`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              '✅ Confirmar',
-              `uber_fare_confirm:${session.uberTripId}`,
-            ),
-          ],
-          [
-            Markup.button.callback(
-              '✏️ Corregir',
-              `uber_fare_correct:${session.uberTripId}`,
-            ),
-            Markup.button.callback(
-              '❌ Cancelar',
-              `uber_fare_cancel:${session.uberTripId}`,
-            ),
-          ],
-        ]),
-      },
-    );
-  }
-
   @Action(/^uber_fare_confirm:(.+)$/)
   async onUberFareConfirm(@Ctx() ctx: Context) {
     const actor = await this.getActor(ctx);
@@ -350,10 +312,6 @@ export class TelegramAdminUpdate {
               Markup.button.callback(
                 '🚗 Uber en camino',
                 `jefe_uber_estado:${(ctx as any).match[1]}:en_camino`,
-              ),
-              Markup.button.callback(
-                '📍 Uber llegó',
-                `jefe_uber_estado:${(ctx as any).match[1]}:llegado`,
               ),
             ],
           ]),
@@ -417,6 +375,20 @@ export class TelegramAdminUpdate {
           ? 'La empleada fue notificada'
           : 'Estado enviado',
       );
+      if (match[2] === 'en_camino') {
+        await ctx.editMessageText('🚗 Uber marcado en camino.', {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '📍 Uber llegó',
+                `jefe_uber_estado:${match[1]}:llegado`,
+              ),
+            ],
+          ]),
+        });
+      } else {
+        await ctx.editMessageText('✅ La llegada del Uber fue confirmada.');
+      }
     } catch (error: any) {
       await ctx.answerCbQuery(error.message, { show_alert: true });
     }

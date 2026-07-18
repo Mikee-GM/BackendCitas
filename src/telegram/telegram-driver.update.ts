@@ -1160,6 +1160,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         const horaLlegada = new Date();
         trip.servicio.horaLlegadaCasa = horaLlegada;
         serviceUpdateData.horaLlegadaCasa = horaLlegada;
+        serviceUpdateData.estadoLiquidacion = 'cerrada';
 
         // Eliminar el tema (hilo) del grupo de Telegram si es viaje de regreso (final del servicio completo)
         const jefeGrupoId =
@@ -1195,6 +1196,39 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     // Ejecutar todas las promesas en paralelo
     await Promise.all(promises);
+
+    if (trip.tipo === 'regreso') {
+      const bossChatId = trip.servicio.jefe?.telegramChatId;
+      if (bossChatId) {
+        await ctx.telegram
+          .sendMessage(
+            bossChatId,
+            `La empleada ${trip.servicio.empleada.nombreArtistico} llegó a su destino. El servicio quedó completado.`,
+          )
+          .catch(() => undefined);
+      }
+      if (trip.servicio.cliente?.telegramChatId) {
+        await ctx.telegram
+          .sendMessage(
+            trip.servicio.cliente.telegramChatId,
+            'El servicio quedó completado: la empleada llegó a su destino.',
+          )
+          .catch(() => undefined);
+      }
+      this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
+        type: 'trip_status_updated',
+        data: {
+          serviceId: trip.servicioId,
+          tripId: trip.id,
+          state: 'finalizado',
+          tripType: 'regreso',
+        },
+      });
+      this.realtimeEventsService.emitToClient(trip.servicio.clienteId, {
+        type: 'service_fully_completed',
+        data: { serviceId: trip.servicioId, tripId: trip.id },
+      });
+    }
 
     // Invalidad caché del chofer ya que chofer.disponible cambió a true
     this.driverIdentityCache.delete(telegramId);
