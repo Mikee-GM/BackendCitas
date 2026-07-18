@@ -539,7 +539,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       // Editar el mensaje para remover los botones inline de pago
       await ctx.editMessageText(
         clientMessages.paymentAndLocation(
-          ctx.session.duracionPactadaHoras,
+          ctx.session.duracionPactadaHoras || 0,
           metodo,
         ),
         { parse_mode: 'Markdown' },
