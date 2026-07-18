@@ -17,6 +17,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { Choferes } from '../drivers/entities/driver.entity';
+import { AiMessageService } from '../ai/ai-message.service';
 
 @Injectable()
 export class ServicesService implements OnModuleInit {
@@ -47,6 +48,7 @@ export class ServicesService implements OnModuleInit {
     @InjectBot() private readonly bot: Telegraf<Context>,
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    private readonly aiMessageService: AiMessageService,
   ) {}
 
   async create(createServiceDto: any): Promise<Servicios> {
@@ -170,9 +172,7 @@ export class ServicesService implements OnModuleInit {
 
     if (servicio.estado !== 'pendiente') {
       throw new ConflictException(
-        servicio.estado === 'pendiente_encadenado'
-          ? 'Este servicio está en lista de espera encadenada y no puede aprobarse directamente. Se activará automáticamente cuando el servicio previo de la empleada finalice.'
-          : 'El servicio ya no está pendiente de aprobación',
+        'El servicio ya no está pendiente de aprobación',
       );
     }
 
@@ -283,11 +283,14 @@ export class ServicesService implements OnModuleInit {
     // Notificar al cliente por Telegram si tiene telegramChatId
     if (servicio.cliente?.telegramChatId) {
       try {
+        const clientMessage = await this.aiMessageService.generate(
+          'service_accepted',
+          { employeeName: servicio.empleada.nombreArtistico },
+          'Oyeee, sí puedo ir contigo, nos vemos en un ratico 😊',
+        );
         await this.bot.telegram.sendMessage(
           servicio.cliente.telegramChatId,
-          `🔔 *¡Tu servicio ha sido aceptado!* 🟢\n\n` +
-            `Tu servicio con la empleada *${servicio.empleada.nombreArtistico}* ha sido aprobado y el transporte ya se está coordinando.`,
-          { parse_mode: 'Markdown' },
+          clientMessage,
         );
       } catch (telegramErr) {
         console.error(
@@ -396,13 +399,14 @@ export class ServicesService implements OnModuleInit {
     // 4. Notificar al cliente via Telegram con opciones de reinicio
     if (servicio.clienteTelegramId) {
       try {
+        const clientMessage = await this.aiMessageService.generate(
+          'service_rejected',
+          { employeeName: servicio.empleada?.nombreArtistico },
+          'Qué pena contigo, esta vez no voy a poder ir 😕',
+        );
         await this.bot.telegram.sendMessage(
           servicio.clienteTelegramId,
-          `❌ *Tu solicitud de servicio ha sido rechazada.* \n\n` +
-            `Lamentamos el inconveniente. Para iniciar un nuevo servicio, por favor utiliza un enlace de contratación desde nuestra web.`,
-          {
-            parse_mode: 'Markdown',
-          },
+          clientMessage,
         );
       } catch (err) {
         console.error('Error notifying client of rejected service:', err);
@@ -419,53 +423,6 @@ export class ServicesService implements OnModuleInit {
         console.error('Error checking active services for extension:', err),
       );
     }, 60000);
-  }
-
-  /**
-   * Devuelve el servicio actualmente en_curso de una empleada, si existe.
-   */
-  async findServicioActivoDeEmpleada(
-    empleadaId: string,
-  ): Promise<Servicios | null> {
-    return this.serviciosRepository.findOne({
-      where: { empleadaId, estado: 'en_curso' },
-      order: { horaInicioServicio: 'DESC' },
-    });
-  }
-
-  /**
-   * Cancela un servicio en estado pendiente_encadenado.
-   * Solo el cliente propietario puede cancelarlo y solo mientras no haya iniciado.
-   */
-  async cancelarServicioEncadenado(
-    servicioId: string,
-    clienteId: string,
-  ): Promise<{ cancelled: boolean }> {
-    const servicio = await this.serviciosRepository.findOne({
-      where: { id: servicioId },
-    });
-
-    if (!servicio) {
-      throw new NotFoundException('Servicio encadenado no encontrado');
-    }
-
-    if (servicio.clienteId !== clienteId) {
-      throw new ConflictException(
-        'No tienes permiso para cancelar este servicio',
-      );
-    }
-
-    if (servicio.estado !== 'pendiente_encadenado') {
-      throw new ConflictException(
-        `El servicio no puede cancelarse porque ya está en estado '${servicio.estado}'`,
-      );
-    }
-
-    servicio.estado = 'cancelado';
-    servicio.servicioPrevioId = null;
-    await this.serviciosRepository.save(servicio);
-
-    return { cancelled: true };
   }
 
   async checkActiveServicesForExtension() {

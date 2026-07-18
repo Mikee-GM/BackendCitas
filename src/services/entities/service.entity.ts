@@ -196,7 +196,6 @@ export class Servicios {
       'en_curso',
       'finalizado',
       'cancelado',
-      'pendiente_encadenado',
     ],
     default: 'pendiente',
   })
@@ -207,7 +206,6 @@ export class Servicios {
       'en_curso',
       'finalizado',
       'cancelado',
-      'pendiente_encadenado',
     ],
     example: 'pendiente',
   })
@@ -215,8 +213,7 @@ export class Servicios {
     | 'pendiente'
     | 'en_curso'
     | 'finalizado'
-    | 'cancelado'
-    | 'pendiente_encadenado';
+    | 'cancelado';
 
   @Column('text', { name: 'notas', nullable: true })
   @ApiPropertyOptional({ description: 'Notas', example: 'Ejemplo' })
@@ -272,26 +269,6 @@ export class Servicios {
   @ApiProperty({ description: 'Notificacion Extension Enviada', example: true })
   notificacionExtensionEnviada: boolean;
 
-  /** ID del servicio que debe terminar antes de que este pueda iniciar (cita encadenada) */
-  @Column('uuid', { name: 'servicio_previo_id', nullable: true })
-  @ApiPropertyOptional({
-    description: 'Servicio Previo Id',
-    example: '00000000-0000-4000-8000-000000000000',
-  })
-  servicioPrevioId: string | null;
-
-  /** Estimación dinámica de cuándo iniciará este servicio (actualizada por trigger al extenderse el previo) */
-  @Column('timestamp with time zone', {
-    name: 'hora_inicio_estimada',
-    nullable: true,
-  })
-  @ApiPropertyOptional({
-    description: 'Hora Inicio Estimada',
-    type: String,
-    format: 'date-time',
-    example: '2026-07-09T12:00:00.000Z',
-  })
-  horaInicioEstimada: Date | null;
 
   @Column('timestamp with time zone', {
     name: 'created_at',
@@ -402,24 +379,4 @@ export class Servicios {
   })
   loyaltyTransactions: LoyaltyTransaction[];
 
-  /** Servicio previo al que está encadenado este (si aplica) */
-  @ManyToOne(() => Servicios, (s) => s.serviciosEncadenados, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn([{ name: 'servicio_previo_id', referencedColumnName: 'id' }])
-  @ApiPropertyOptional({
-    description: 'Servicio Previo',
-    type: () => Servicios,
-  })
-  servicioPrevio: Servicios | null;
-
-  /** Servicios que están en cola esperando que este termine */
-  @OneToMany(() => Servicios, (s) => s.servicioPrevio)
-  @ApiProperty({
-    description: 'Servicios Encadenados',
-    type: () => [Servicios],
-    example: [],
-  })
-  serviciosEncadenados: Servicios[];
 }
