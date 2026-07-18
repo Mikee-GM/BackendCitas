@@ -305,10 +305,18 @@ export class ServicesService implements OnModuleInit {
       const latCli = servicio.ubicacionClienteLat;
       const lngCli = servicio.ubicacionClienteLng;
 
-      uberLink = `https://uber.com/ul/?action=setPickup&dropoff[latitude]=${latCli}&dropoff[longitude]=${lngCli}`;
+      // m.uber.com/ul/ es el Universal Link oficial: abre la app si está instalada
+      // y hace fallback a la web móvil si no lo está.
+      // dropoff[nickname] es obligatorio para que el pin de destino aparezca en la app.
+      let uberBase = `https://m.uber.com/ul/?action=setPickup`;
+      uberBase += `&dropoff[latitude]=${latCli}&dropoff[longitude]=${lngCli}&dropoff[nickname]=Destino`;
       if (latEmp && lngEmp) {
-        uberLink += `&pickup[latitude]=${latEmp}&pickup[longitude]=${lngEmp}`;
+        uberBase += `&pickup[latitude]=${latEmp}&pickup[longitude]=${lngEmp}&pickup[nickname]=Recoger%20Empleada`;
+      } else {
+        // Sin ubicación de empleada, Uber usará la ubicación actual del usuario
+        uberBase += `&pickup=my_location`;
       }
+      uberLink = uberBase;
     } else {
       try {
         await this.dispatchViaje(viajeGuardado.id);

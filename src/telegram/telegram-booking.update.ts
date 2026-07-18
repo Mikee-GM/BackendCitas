@@ -1417,6 +1417,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     // Si no es personal, continuar flujo de cliente
+    // Helper: escape Markdown v1 special characters so Telegram doesn't choke
+    const escapeMd = (text: string): string =>
+      text
+        .replace(/\n/g, ' ') // newlines → space (critical for inline fields)
+        .replace(/([_*[`])/g, '\\$1'); // escape Markdown special chars
     const step = ctx.session?.step;
     if (
       step !== 'AWAITING_LOCATION' &&
@@ -1428,83 +1433,235 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    const isEncadenado = step === 'AWAITING_LOCATION_ENCADENADO';
+    // Sanitize notasUbicacion so it is safe to embed in Markdown messages
+    const notasUbicacionSafe = notasUbicacion ? escapeMd(notasUbicacion) : null;
 
-    const { empleadaId, duracionPactadaHoras, metodoPago, servicioPrevioId } =
-      ctx.session || {};
+    try {
+      const isEncadenado = step === 'AWAITING_LOCATION_ENCADENADO';
 
-    if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
-      await ctx.reply(
-        '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
-      );
-      if (ctx.session) ctx.session = {};
-      return;
-    }
+      const { empleadaId, duracionPactadaHoras, metodoPago, servicioPrevioId } =
+        ctx.session || {};
 
-    const client = await this.clientesRepository.findOne({
-      where: { telegramChatId: telegramId },
-    });
+      if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
+        await ctx.reply(
+          '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
+        );
+        if (ctx.session) ctx.session = {};
+        return;
+      }
 
-    if (!client) {
-      await ctx.reply('❌ Cliente no encontrado. Por favor inicia con /start');
-      ctx.session = {};
-      return;
-    }
-
-    const empleada = await this.empleadasRepository.findOne({
-      where: { id: empleadaId },
-    });
-
-    if (!empleada) {
-      await ctx.reply('La empleada seleccionada ya no está disponible.');
-      ctx.session = {};
-      return;
-    }
-
-    let jefe: Usuarios | null = null;
-    if (empleada.jefeId) {
-      const mainJefe = await this.usuariosRepository.findOne({
-        where: { id: empleada.jefeId, activo: true },
+      const client = await this.clientesRepository.findOne({
+        where: { telegramChatId: telegramId },
       });
-      if (mainJefe && mainJefe.disponible) {
-        jefe = mainJefe;
-      } else if (empleada.jefeSecundarioId) {
-        const secJefe = await this.usuariosRepository.findOne({
-          where: { id: empleada.jefeSecundarioId, activo: true },
+
+      if (!client) {
+        await ctx.reply(
+          '❌ Cliente no encontrado. Por favor inicia con /start',
+        );
+        ctx.session = {};
+        return;
+      }
+
+      const empleada = await this.empleadasRepository.findOne({
+        where: { id: empleadaId },
+      });
+
+      if (!empleada) {
+        await ctx.reply('La empleada seleccionada ya no está disponible.');
+        ctx.session = {};
+        return;
+      }
+
+      let jefe: Usuarios | null = null;
+      if (empleada.jefeId) {
+        const mainJefe = await this.usuariosRepository.findOne({
+          where: { id: empleada.jefeId, activo: true },
         });
-        if (secJefe && secJefe.disponible) {
-          jefe = secJefe;
+        if (mainJefe && mainJefe.disponible) {
+          jefe = mainJefe;
+        } else if (empleada.jefeSecundarioId) {
+          const secJefe = await this.usuariosRepository.findOne({
+            where: { id: empleada.jefeSecundarioId, activo: true },
+          });
+          if (secJefe && secJefe.disponible) {
+            jefe = secJefe;
+          }
         }
       }
-    }
-    if (!jefe) {
-      jefe = await this.usuariosRepository.findOne({
-        where: [
-          { rol: 'jefe', activo: true, disponible: true },
-          { rol: 'admin', activo: true, disponible: true },
-        ],
-      });
       if (!jefe) {
         jefe = await this.usuariosRepository.findOne({
           where: [
-            { rol: 'jefe', activo: true },
-            { rol: 'admin', activo: true },
+            { rol: 'jefe', activo: true, disponible: true },
+            { rol: 'admin', activo: true, disponible: true },
           ],
         });
+        if (!jefe) {
+          jefe = await this.usuariosRepository.findOne({
+            where: [
+              { rol: 'jefe', activo: true },
+              { rol: 'admin', activo: true },
+            ],
+          });
+        }
       }
-    }
 
-    if (!jefe) {
-      await ctx.reply(
-        '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
-      );
-      return;
-    }
-    const jefeId = jefe.id;
+      if (!jefe) {
+        await ctx.reply(
+          '❌ No hay ningún jefe o administrador activo asignado en el sistema en este momento para autorizar el servicio.',
+        );
+        return;
+      }
+      const jefeId = jefe.id;
 
-    // ─── FLUJO ENCADENADO ───────────────────────────────────────────────────
-    if (isEncadenado) {
-      const nuevoServicioEnc = this.serviciosRepository.create({
+      // ─── FLUJO ENCADENADO ───────────────────────────────────────────────────
+      if (isEncadenado) {
+        const nuevoServicioEnc = this.serviciosRepository.create({
+          clienteId: client.id,
+          empleadaId: empleada.id,
+          jefeId: jefeId,
+          duracionPactadaHoras: duracionPactadaHoras,
+          metodoPago: metodoPago,
+          ubicacionClienteLat: parseFloat(lat),
+          ubicacionClienteLng: parseFloat(lng),
+          precioBaseHoraPactado: empleada.precioBaseHora,
+          estado: 'pendiente_encadenado',
+          notas: notasUbicacion,
+          servicioPrevioId: servicioPrevioId || null,
+          clienteTelegramId: telegramId,
+          iaActiva: false,
+        });
+        // 1. SAVE INICIAL (INSERT)
+        await this.serviciosRepository.save(nuevoServicioEnc);
+
+        const jefeUser = await this.usuariosRepository.findOne({
+          where: { id: jefeId },
+        });
+        if (jefeUser && jefeUser.grupoTelegramId) {
+          try {
+            const clientName =
+              client.nombreTelegram || ctx.from?.first_name || 'Cliente';
+            const topic = await ctx.telegram.createForumTopic(
+              jefeUser.grupoTelegramId,
+              `👤 Cliente: ${clientName}`,
+            );
+            // Acumulamos en memoria
+            nuevoServicioEnc.telegramThreadId =
+              topic.message_thread_id.toString();
+
+            const detailsMsg =
+              `📋 *Información del Servicio (Cita Encadenada):*\n\n` +
+              `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
+              `• *Empleada:* ${empleada.nombreArtistico}\n` +
+              `• *Duración:* ${duracionPactadaHoras} horas\n` +
+              `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+              `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
+              (notasUbicacionSafe
+                ? `• *Ubicación/Notas:* ${notasUbicacionSafe}\n`
+                : '') +
+              `• *Estado:* Pendiente Encadenada`;
+            await ctx.telegram.sendMessage(
+              jefeUser.grupoTelegramId,
+              detailsMsg,
+              {
+                message_thread_id: topic.message_thread_id,
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                  [
+                    Markup.button.callback(
+                      '🟢 Aceptar',
+                      `jefe_autorizar:${nuevoServicioEnc.id}:1`,
+                    ),
+                    Markup.button.callback(
+                      '🔴 Rechazar',
+                      `jefe_autorizar:${nuevoServicioEnc.id}:0`,
+                    ),
+                  ],
+                ]),
+              },
+            );
+            await ctx.telegram.sendLocation(
+              jefeUser.grupoTelegramId,
+              parseFloat(lat),
+              parseFloat(lng),
+              { message_thread_id: topic.message_thread_id },
+            );
+          } catch (err) {
+            this.logger.error(
+              'Error al crear forum topic para servicio encadenado:',
+              err,
+            );
+          }
+        }
+
+        // Calculate estimated start time from the active service
+        let horaEstimadaStr = 'próximamente';
+        if (servicioPrevioId) {
+          const servicioActivo = await this.serviciosRepository.findOne({
+            where: { id: servicioPrevioId },
+          });
+          if (servicioActivo?.horaInicioServicio) {
+            const estimada = new Date(
+              servicioActivo.horaInicioServicio.getTime() +
+                Number(servicioActivo.duracionPactadaHoras) * 60 * 60 * 1000,
+            );
+            // Acumulamos en memoria
+            nuevoServicioEnc.horaInicioEstimada = estimada;
+            horaEstimadaStr = estimada.toLocaleTimeString('es-MX', {
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+          }
+        }
+
+        ctx.session = {};
+
+        let msgEnc =
+          `📅 *¡Cita Encadenada Registrada!*\n\n` +
+          `📝 *Resumen:*\n` +
+          `• *Empleada:* ${empleada.nombreArtistico}\n` +
+          `• *Duración:* ${duracionPactadaHoras} horas\n` +
+          `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
+          `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
+          `• *Inicio estimado:* ${horaEstimadaStr}\n\n` +
+          `⏳ Tu cita está en la lista de espera. Te avisaremos tan pronto la empleada quede libre.\n` +
+          `Puedes cancelar esta reserva presionando el botón de abajo:`;
+
+        if (notasUbicacionSafe) {
+          msgEnc += `\n• *Ubicación:* ${notasUbicacionSafe}`;
+        }
+
+        const msgEnviadoEnc = await ctx.reply(msgEnc, {
+          parse_mode: 'Markdown',
+          ...Markup.removeKeyboard(),
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                '❌ Cancelar esta Reserva',
+                `cancelar_encadenado:${nuevoServicioEnc.id}`,
+              ),
+            ],
+          ]),
+        });
+
+        // Acumulamos en memoria
+        nuevoServicioEnc.telegramClienteMensajeId =
+          msgEnviadoEnc.message_id.toString();
+
+        // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
+        await this.serviciosRepository.save(nuevoServicioEnc);
+
+        // Notify jefe of new chained service
+        try {
+          await this.telegramService.notifyJefesNewService(nuevoServicioEnc.id);
+        } catch (err) {
+          console.error('Error notificando jefe sobre cita encadenada:', err);
+        }
+
+        return;
+      }
+
+      // ─── FLUJO NORMAL ────────────────────────────────────────────────────────
+      const nuevoServicio = this.serviciosRepository.create({
         clienteId: client.id,
         empleadaId: empleada.id,
         jefeId: jefeId,
@@ -1513,14 +1670,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         ubicacionClienteLat: parseFloat(lat),
         ubicacionClienteLng: parseFloat(lng),
         precioBaseHoraPactado: empleada.precioBaseHora,
-        estado: 'pendiente_encadenado',
+        estado: 'pendiente',
         notas: notasUbicacion,
-        servicioPrevioId: servicioPrevioId || null,
         clienteTelegramId: telegramId,
         iaActiva: false,
       });
       // 1. SAVE INICIAL (INSERT)
-      await this.serviciosRepository.save(nuevoServicioEnc);
+      await this.serviciosRepository.save(nuevoServicio);
 
       const jefeUser = await this.usuariosRepository.findOne({
         where: { id: jefeId },
@@ -1534,18 +1690,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             `👤 Cliente: ${clientName}`,
           );
           // Acumulamos en memoria
-          nuevoServicioEnc.telegramThreadId =
-            topic.message_thread_id.toString();
+          nuevoServicio.telegramThreadId = topic.message_thread_id.toString();
 
           const detailsMsg =
-            `📋 *Información del Servicio (Cita Encadenada):*\n\n` +
+            `📋 *Información del Servicio:*\n\n` +
             `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
             `• *Empleada:* ${empleada.nombreArtistico}\n` +
             `• *Duración:* ${duracionPactadaHoras} horas\n` +
             `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
             `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
-            (notasUbicacion ? `• *Ubicación/Notas:* ${notasUbicacion}\n` : '') +
-            `• *Estado:* Pendiente Encadenada`;
+            (notasUbicacionSafe
+              ? `• *Ubicación/Notas:* ${notasUbicacionSafe}\n`
+              : '') +
+            `• *Estado:* Pendiente`;
           await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
             message_thread_id: topic.message_thread_id,
             parse_mode: 'Markdown',
@@ -1553,11 +1710,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               [
                 Markup.button.callback(
                   '🟢 Aceptar',
-                  `jefe_autorizar:${nuevoServicioEnc.id}:1`,
+                  `jefe_autorizar:${nuevoServicio.id}:1`,
                 ),
                 Markup.button.callback(
                   '🔴 Rechazar',
-                  `jefe_autorizar:${nuevoServicioEnc.id}:0`,
+                  `jefe_autorizar:${nuevoServicio.id}:0`,
                 ),
               ],
             ]),
@@ -1570,199 +1727,77 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           );
         } catch (err) {
           this.logger.error(
-            'Error al crear forum topic para servicio encadenado:',
+            'Error al crear forum topic para servicio normal:',
             err,
           );
         }
       }
 
-      // Calculate estimated start time from the active service
-      let horaEstimadaStr = 'próximamente';
-      if (servicioPrevioId) {
-        const servicioActivo = await this.serviciosRepository.findOne({
-          where: { id: servicioPrevioId },
+      // Emit event to Jefes in real-time
+      const serviceWithRelations = await this.serviciosRepository.findOne({
+        where: { id: nuevoServicio.id },
+        relations: { cliente: true, empleada: true },
+      });
+      if (serviceWithRelations) {
+        this.realtimeEventsService.emitToJefes({
+          type: 'service_requested',
+          data: serviceWithRelations,
         });
-        if (servicioActivo?.horaInicioServicio) {
-          const estimada = new Date(
-            servicioActivo.horaInicioServicio.getTime() +
-              Number(servicioActivo.duracionPactadaHoras) * 60 * 60 * 1000,
+
+        try {
+          await this.telegramService.notifyJefesNewService(
+            serviceWithRelations.id,
           );
-          // Acumulamos en memoria
-          nuevoServicioEnc.horaInicioEstimada = estimada;
-          horaEstimadaStr = estimada.toLocaleTimeString('es-MX', {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
+        } catch (err) {
+          console.error(
+            'Error al enviar notificaciones de Telegram para el nuevo servicio:',
+            err,
+          );
         }
       }
 
       ctx.session = {};
 
-      let msgEnc =
-        `📅 *¡Cita Encadenada Registrada!*\n\n` +
-        `📝 *Resumen:*\n` +
+      let msgExito =
+        `🎉 *¡Servicio Solicitado con Éxito!*\n\n` +
+        `📝 *Resumen del Servicio:*\n` +
         `• *Empleada:* ${empleada.nombreArtistico}\n` +
         `• *Duración:* ${duracionPactadaHoras} horas\n` +
         `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
-        `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
-        `• *Inicio estimado:* ${horaEstimadaStr}\n\n` +
-        `⏳ Tu cita está en la lista de espera. Te avisaremos tan pronto la empleada quede libre.\n` +
-        `Puedes cancelar esta reserva presionando el botón de abajo:`;
+        `• *Tarifa Pactada:* $${empleada.precioBaseHora}/hr\n` +
+        `• *Estado:* Pendiente de aprobación\n`;
 
-      if (notasUbicacion) {
-        msgEnc += `\n• *Ubicación:* ${notasUbicacion}`;
+      if (notasUbicacionSafe) {
+        msgExito += `• *Ubicación:* ${notasUbicacionSafe}\n`;
       }
 
-      const msgEnviadoEnc = await ctx.reply(msgEnc, {
+      msgExito += `\nPronto un administrador se pondrá en contacto contigo. ¡Gracias por tu preferencia!`;
+
+      const msg = await ctx.reply(msgExito, {
         parse_mode: 'Markdown',
         ...Markup.removeKeyboard(),
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              '❌ Cancelar esta Reserva',
-              `cancelar_encadenado:${nuevoServicioEnc.id}`,
-            ),
-          ],
-        ]),
       });
 
       // Acumulamos en memoria
-      nuevoServicioEnc.telegramClienteMensajeId =
-        msgEnviadoEnc.message_id.toString();
-
+      nuevoServicio.telegramClienteMensajeId = msg.message_id.toString();
       // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
-      await this.serviciosRepository.save(nuevoServicioEnc);
-
-      // Notify jefe of new chained service
+      await this.serviciosRepository.save(nuevoServicio);
+    } catch (bookingErr) {
+      // Safety net: never leave the client frozen without a response
+      this.logger.error(
+        'Error crítico en flujo de contratación (onLocation):',
+        bookingErr,
+      );
+      if (ctx.session) ctx.session = {};
       try {
-        await this.telegramService.notifyJefesNewService(nuevoServicioEnc.id);
-      } catch (err) {
-        console.error('Error notificando jefe sobre cita encadenada:', err);
-      }
-
-      return;
-    }
-
-    // ─── FLUJO NORMAL ────────────────────────────────────────────────────────
-    const nuevoServicio = this.serviciosRepository.create({
-      clienteId: client.id,
-      empleadaId: empleada.id,
-      jefeId: jefeId,
-      duracionPactadaHoras: duracionPactadaHoras,
-      metodoPago: metodoPago,
-      ubicacionClienteLat: parseFloat(lat),
-      ubicacionClienteLng: parseFloat(lng),
-      precioBaseHoraPactado: empleada.precioBaseHora,
-      estado: 'pendiente',
-      notas: notasUbicacion,
-      clienteTelegramId: telegramId,
-      iaActiva: false,
-    });
-    // 1. SAVE INICIAL (INSERT)
-    await this.serviciosRepository.save(nuevoServicio);
-
-    const jefeUser = await this.usuariosRepository.findOne({
-      where: { id: jefeId },
-    });
-    if (jefeUser && jefeUser.grupoTelegramId) {
-      try {
-        const clientName =
-          client.nombreTelegram || ctx.from?.first_name || 'Cliente';
-        const topic = await ctx.telegram.createForumTopic(
-          jefeUser.grupoTelegramId,
-          `👤 Cliente: ${clientName}`,
+        await ctx.reply(
+          '⚠️ Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo desde el catálogo.',
+          Markup.removeKeyboard(),
         );
-        // Acumulamos en memoria
-        nuevoServicio.telegramThreadId = topic.message_thread_id.toString();
-
-        const detailsMsg =
-          `📋 *Información del Servicio:*\n\n` +
-          `• *Cliente:* ${clientName} (ID: ${telegramId})\n` +
-          `• *Empleada:* ${empleada.nombreArtistico}\n` +
-          `• *Duración:* ${duracionPactadaHoras} horas\n` +
-          `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
-          `• *Tarifa:* $${empleada.precioBaseHora}/hr\n` +
-          (notasUbicacion ? `• *Ubicación/Notas:* ${notasUbicacion}\n` : '') +
-          `• *Estado:* Pendiente`;
-        await ctx.telegram.sendMessage(jefeUser.grupoTelegramId, detailsMsg, {
-          message_thread_id: topic.message_thread_id,
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback(
-                '🟢 Aceptar',
-                `jefe_autorizar:${nuevoServicio.id}:1`,
-              ),
-              Markup.button.callback(
-                '🔴 Rechazar',
-                `jefe_autorizar:${nuevoServicio.id}:0`,
-              ),
-            ],
-          ]),
-        });
-        await ctx.telegram.sendLocation(
-          jefeUser.grupoTelegramId,
-          parseFloat(lat),
-          parseFloat(lng),
-          { message_thread_id: topic.message_thread_id },
-        );
-      } catch (err) {
-        this.logger.error(
-          'Error al crear forum topic para servicio normal:',
-          err,
-        );
+      } catch (_) {
+        /* ignore secondary send error */
       }
     }
-
-    // Emit event to Jefes in real-time
-    const serviceWithRelations = await this.serviciosRepository.findOne({
-      where: { id: nuevoServicio.id },
-      relations: { cliente: true, empleada: true },
-    });
-    if (serviceWithRelations) {
-      this.realtimeEventsService.emitToJefes({
-        type: 'service_requested',
-        data: serviceWithRelations,
-      });
-
-      try {
-        await this.telegramService.notifyJefesNewService(
-          serviceWithRelations.id,
-        );
-      } catch (err) {
-        console.error(
-          'Error al enviar notificaciones de Telegram para el nuevo servicio:',
-          err,
-        );
-      }
-    }
-
-    ctx.session = {};
-
-    let msgExito =
-      `🎉 *¡Servicio Solicitado con Éxito!*\n\n` +
-      `📝 *Resumen del Servicio:*\n` +
-      `• *Empleada:* ${empleada.nombreArtistico}\n` +
-      `• *Duración:* ${duracionPactadaHoras} horas\n` +
-      `• *Método de Pago:* ${metodoPago.toUpperCase()}\n` +
-      `• *Tarifa Pactada:* $${empleada.precioBaseHora}/hr\n` +
-      `• *Estado:* Pendiente de aprobación\n`;
-
-    if (notasUbicacion) {
-      msgExito += `• *Ubicación:* ${message.venue.title} (${message.venue.address})\n`;
-    }
-
-    msgExito += `\nPronto un administrador se pondrá en contacto contigo. ¡Gracias por tu preferencia!`;
-
-    const msg = await ctx.reply(msgExito, {
-      parse_mode: 'Markdown',
-      ...Markup.removeKeyboard(),
-    });
-
-    // Acumulamos en memoria
-    nuevoServicio.telegramClienteMensajeId = msg.message_id.toString();
-    // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
-    await this.serviciosRepository.save(nuevoServicio);
   }
 
   @Action(/^extender_servicio:(.+):(.+)$/)
