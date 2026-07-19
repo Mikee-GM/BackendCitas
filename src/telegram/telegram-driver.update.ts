@@ -1,5 +1,5 @@
 import { Inject, forwardRef, BeforeApplicationShutdown } from '@nestjs/common';
-import { Update, Ctx, Action } from 'nestjs-telegraf';
+import { Update, Ctx, Action, On } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
@@ -11,6 +11,8 @@ import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { Servicios } from '../services/entities/service.entity';
 import { AiMessageService } from '../ai/ai-message.service';
+import { EmployeeReportsService } from '../employee-reports/employee-reports.service';
+import { ReportCategory } from '../employee-reports/entities/employee-report.entity';
 
 interface DriverCacheEntry {
   userId: string;
@@ -42,6 +44,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
     private readonly aiMessageService: AiMessageService,
+    private readonly employeeReportsService: EmployeeReportsService,
   ) {
     this.cacheCleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -1245,6 +1248,9 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     try {
       await ctx.editMessageText(messageText, {
         parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([[
+          Markup.button.callback('⚠️ Reportar empleada', `er_driver_start:${trip.servicio.id}`),
+        ]]),
       });
     } catch (err) {
       console.error('Error actualizando mensaje de finalización:', err);
@@ -1320,6 +1326,106 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(inlineButtons),
     });
+  }
+
+  private driverReportLabel(category: ReportCategory): string {
+    return ({
+      trato_inadecuado: 'Trato inadecuado',
+      demora_impuntualidad: 'Demora o impuntualidad',
+      incumplimiento: 'Incumplimiento',
+      cobro: 'Cobro',
+      seguridad: 'Seguridad',
+      otro: 'Otro',
+    } as Record<ReportCategory, string>)[category];
+  }
+
+  @Action(/^er_driver_start:(.+)$/)
+  async onDriverReportStart(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const serviceId = (ctx as any).match?.[1];
+    const categories: ReportCategory[] = [
+      'trato_inadecuado',
+      'demora_impuntualidad',
+      'incumplimiento',
+      'cobro',
+      'seguridad',
+      'otro',
+    ];
+    await ctx.reply(
+      'Selecciona la categoría que mejor describe lo ocurrido:',
+      Markup.inlineKeyboard([
+        ...categories.map((category) => [
+          Markup.button.callback(
+            this.driverReportLabel(category),
+            `er_driver_cat:${serviceId}:${category}`,
+          ),
+        ]),
+        [Markup.button.callback('❌ Cancelar', 'er_driver_cancel')],
+      ]),
+    );
+  }
+
+  @Action(/^er_driver_cat:([^:]+):(trato_inadecuado|demora_impuntualidad|incumplimiento|cobro|seguridad|otro)$/)
+  async onDriverReportCategory(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    const session = ((ctx as any).session ||= {});
+    session.step = 'AWAITING_DRIVER_REPORT_DESCRIPTION';
+    session.reportServiceId = match[1];
+    session.reportCategory = match[2];
+    delete session.reportDescription;
+    await ctx.reply(
+      `Describe brevemente lo ocurrido para la categoría “${this.driverReportLabel(match[2])}”.`,
+    );
+  }
+
+  @On('text')
+  async onDriverReportText(@Ctx() ctx: Context) {
+    const session = (ctx as any).session;
+    if (session?.step !== 'AWAITING_DRIVER_REPORT_DESCRIPTION') return;
+    const description = ((ctx.message as { text?: string })?.text || '').trim();
+    if (description.length < 3 || description.length > 2000) {
+      await ctx.reply('La descripción debe tener entre 3 y 2000 caracteres.');
+      return;
+    }
+    session.reportDescription = description;
+    await ctx.reply(
+      `Confirma tu reporte:\n\nCategoría: ${this.driverReportLabel(session.reportCategory)}\nDescripción: ${description}`,
+      Markup.inlineKeyboard([[
+        Markup.button.callback('✅ Enviar', 'er_driver_confirm'),
+        Markup.button.callback('❌ Cancelar', 'er_driver_cancel'),
+      ]]),
+    );
+  }
+
+  @Action('er_driver_confirm')
+  async onDriverReportConfirm(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from?.id.toString();
+    const session = (ctx as any).session;
+    if (!telegramId || !session?.reportServiceId || !session.reportCategory || !session.reportDescription) {
+      await ctx.reply('La sesión del reporte expiró. Inicia el proceso nuevamente.');
+      return;
+    }
+    try {
+      await this.employeeReportsService.createFromDriver(
+        telegramId,
+        session.reportServiceId,
+        session.reportCategory,
+        session.reportDescription,
+      );
+      (ctx as any).session = {};
+      await ctx.editMessageText('✅ Recibimos tu reporte. Un administrador lo revisará.');
+    } catch (error: any) {
+      await ctx.reply(`No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`);
+    }
+  }
+
+  @Action('er_driver_cancel')
+  async onDriverReportCancel(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Reporte cancelado');
+    (ctx as any).session = {};
+    await ctx.editMessageText('Reporte cancelado.');
   }
 
   @Action(/^r_v_o:(.+)$/)

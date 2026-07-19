@@ -31,6 +31,9 @@ import {
 import { clientMessages } from './client-messages';
 import { AiMessageService } from '../ai/ai-message.service';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import { EmployeeReportsService } from '../employee-reports/employee-reports.service';
+import { ReportCategory } from '../employee-reports/entities/employee-report.entity';
+import { ExtensionsService } from '../extensions/extensions.service';
 
 interface SessionData {
   step?:
@@ -38,6 +41,7 @@ interface SessionData {
     | 'AWAITING_PAYMENT_METHOD'
     | 'AWAITING_LOCATION'
     | 'AWAITING_RATING_COMMENT'
+    | 'AWAITING_CLIENT_REPORT_DESCRIPTION'
     | 'AWAITING_UBER_SCREENSHOT'
     | 'AWAITING_UBER_FARE_ACTION'
     | 'AWAITING_UBER_FARE'
@@ -46,6 +50,9 @@ interface SessionData {
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
   servicioIdCalificacion?: string;
+  reportServiceId?: string;
+  reportCategory?: ReportCategory;
+  reportDescription?: string;
   uberTripId?: string;
   pendingUberFare?: number;
   chatHistory?: { role: 'user' | 'model'; parts: { text: string }[] }[];
@@ -163,6 +170,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly loyaltyService: LoyaltyService,
     private readonly telegramBookingService: TelegramBookingService,
     private readonly aiMessageService: AiMessageService,
+    private readonly employeeReportsService: EmployeeReportsService,
+    private readonly extensionsService: ExtensionsService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
     this.locationCleanupInterval = setInterval(() => {
@@ -1016,6 +1025,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     if (rating >= 3) {
       await ctx.editMessageText(
         `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!`,
+        Markup.inlineKeyboard([[Markup.button.callback('⚠️ Reportar empleada', `er_client_start:${servicioId}`)]]),
       );
       await ctx.reply('¡Agradecemos tu preferencia!', Markup.removeKeyboard());
     } else {
@@ -1032,6 +1042,92 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         { parse_mode: 'Markdown' },
       );
     }
+  }
+
+  private reportCategoryLabel(category: ReportCategory): string {
+    return ({
+      trato_inadecuado: 'Trato inadecuado',
+      demora_impuntualidad: 'Demora o impuntualidad',
+      incumplimiento: 'Incumplimiento',
+      cobro: 'Cobro',
+      seguridad: 'Seguridad',
+      otro: 'Otro',
+    } as Record<ReportCategory, string>)[category];
+  }
+
+  private reportCategoryKeyboard(prefix: string, serviceId: string) {
+    const categories: ReportCategory[] = [
+      'trato_inadecuado',
+      'demora_impuntualidad',
+      'incumplimiento',
+      'cobro',
+      'seguridad',
+      'otro',
+    ];
+    return Markup.inlineKeyboard([
+      ...categories.map((category) => [
+        Markup.button.callback(
+          this.reportCategoryLabel(category),
+          `${prefix}_cat:${serviceId}:${category}`,
+        ),
+      ]),
+      [Markup.button.callback('❌ Cancelar', 'er_client_cancel')],
+    ]);
+  }
+
+  @Action(/^er_client_start:(.+)$/)
+  async onClientReportStart(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const serviceId = (ctx as any).match?.[1];
+    if (!serviceId) return;
+    await ctx.reply(
+      'Selecciona la categoría que mejor describe lo ocurrido:',
+      this.reportCategoryKeyboard('er_client', serviceId),
+    );
+  }
+
+  @Action(/^er_client_cat:([^:]+):(trato_inadecuado|demora_impuntualidad|incumplimiento|cobro|seguridad|otro)$/)
+  async onClientReportCategory(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    ctx.session = ctx.session || {};
+    ctx.session.step = 'AWAITING_CLIENT_REPORT_DESCRIPTION';
+    ctx.session.reportServiceId = match[1];
+    ctx.session.reportCategory = match[2] as ReportCategory;
+    delete ctx.session.reportDescription;
+    await ctx.reply(
+      `Describe brevemente lo ocurrido para la categoría “${this.reportCategoryLabel(ctx.session.reportCategory)}”.`,
+    );
+  }
+
+  @Action('er_client_confirm')
+  async onClientReportConfirm(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from?.id.toString();
+    const session = ctx.session;
+    if (!telegramId || !session?.reportServiceId || !session.reportCategory || !session.reportDescription) {
+      await ctx.reply('La sesión del reporte expiró. Inicia el proceso nuevamente.');
+      return;
+    }
+    try {
+      await this.employeeReportsService.createFromClient(
+        telegramId,
+        session.reportServiceId,
+        session.reportCategory,
+        session.reportDescription,
+      );
+      ctx.session = {};
+      await ctx.editMessageText('✅ Recibimos tu reporte. Un administrador lo revisará.');
+    } catch (error: any) {
+      await ctx.reply(`No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`);
+    }
+  }
+
+  @Action('er_client_cancel')
+  async onClientReportCancel(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery('Reporte cancelado');
+    ctx.session = {};
+    await ctx.editMessageText('Reporte cancelado.');
   }
 
   @On(['location', 'venue', 'edited_message'])
@@ -1652,6 +1748,25 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
+    if ((ctx.session?.step as string) === 'AWAITING_DRIVER_REPORT_DESCRIPTION') return;
+    if (ctx.session?.step === 'AWAITING_CLIENT_REPORT_DESCRIPTION') {
+      const description = ((ctx.message as { text?: string })?.text || '').trim();
+      if (description.length < 3 || description.length > 2000) {
+        await ctx.reply('La descripción debe tener entre 3 y 2000 caracteres.');
+        return;
+      }
+      ctx.session.reportDescription = description;
+      await ctx.reply(
+        `Confirma tu reporte:\n\nCategoría: ${this.reportCategoryLabel(ctx.session.reportCategory!)}\nDescripción: ${description}`,
+        {
+          ...Markup.inlineKeyboard([[
+            Markup.button.callback('✅ Enviar', 'er_client_confirm'),
+            Markup.button.callback('❌ Cancelar', 'er_client_cancel'),
+          ]]),
+        },
+      );
+      return;
+    }
     if (ctx.session?.step === 'AWAITING_UBER_FARE') {
       const text = (ctx.message as { text?: string })?.text || '';
       const amount = parseUberFareInput(text);
@@ -2231,7 +2346,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
       await ctx.reply(
         `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.`,
-        Markup.removeKeyboard(),
+        servicioId
+          ? Markup.inlineKeyboard([[
+              Markup.button.callback(
+                '⚠️ Reportar empleada',
+                `er_client_start:${servicioId}`,
+              ),
+            ]])
+          : Markup.removeKeyboard(),
       );
       return;
     }
@@ -2296,6 +2418,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
+    if (!(await this.isAssignedEmployee(ctx, servicio))) {
+      await ctx.answerCbQuery(
+        'No puedes solicitar prórrogas para este servicio.',
+        { show_alert: true },
+      );
+      return;
+    }
+
     if (servicio.estado !== 'en_curso') {
       await ctx.answerCbQuery(
         '⚠️ Este servicio ya no está en curso o fue cancelado.',
@@ -2312,11 +2442,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
+    const extension = await this.extensionsService.requestServiceExtension(servicio.id, 10);
+    servicio.prorrogasUsadas = extension.extensionNumber;
     await ctx.answerCbQuery('Prórroga de 10 minutos concedida.');
-
-    // Incrementar prórrogas usadas
-    servicio.prorrogasUsadas += 1;
-    await this.serviciosRepository.save(servicio);
 
     // Reiniciar wait timeout a 10 minutos (600,000 ms)
     this.servicesService.startWaitTimeout(servicio.id, 600000);

@@ -1470,14 +1470,15 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       `• Puntos ganados: ${award.pointsEarned}\n\n` +
       `Por favor, califica el servicio:`;
     if (servicio.cliente?.telegramChatId) {
-      const keyboard = Markup.inlineKeyboard(
-        [1, 2, 3, 4, 5].map((rating) => [
+      const keyboard = Markup.inlineKeyboard([
+        ...[1, 2, 3, 4, 5].map((rating) => [
           Markup.button.callback(
             `${rating} - ${'⭐'.repeat(rating)}`,
             `calificar_servicio:${servicio.id}:${rating}`,
           ),
         ]),
-      );
+        [Markup.button.callback('⚠️ Reportar empleada', `er_client_start:${servicio.id}`)],
+      ]);
       try {
         if (servicio.telegramResumenDefinitivoId) {
           await this.bot.telegram.editMessageText(

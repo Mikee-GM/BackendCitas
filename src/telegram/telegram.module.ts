@@ -24,6 +24,8 @@ import { Viajes } from '../trips/entities/trip.entity';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import { EmployeeReportsModule } from '../employee-reports/employee-reports.module';
+import { ExtensionsModule } from '../extensions/extensions.module';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { ConversacionesTelegram } from '../telegram-conversations/entities/teleg
     LoyaltyModule,
     AiModule,
     forwardRef(() => ServicesModule),
+    EmployeeReportsModule,
+    ExtensionsModule,
     TelegrafModule.forRootAsync({
       imports: [ConfigModule, TypeOrmModule.forFeature([TelegramSession])],
       useFactory: (

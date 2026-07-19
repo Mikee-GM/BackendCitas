@@ -25,6 +25,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ApartmentsModule } from './apartments/apartments.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { UploadModule } from './upload/upload.module';
+import { EmployeeReportsModule } from './employee-reports/employee-reports.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { UploadModule } from './upload/upload.module';
     TelegramConversationsModule,
     EmployeePhotosModule,
     ApartmentsModule,
+    EmployeeReportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
