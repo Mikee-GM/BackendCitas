@@ -13,6 +13,10 @@ import { Servicios } from '../services/entities/service.entity';
 import { AiMessageService } from '../ai/ai-message.service';
 import { EmployeeReportsService } from '../employee-reports/employee-reports.service';
 import { ReportCategory } from '../employee-reports/entities/employee-report.entity';
+import {
+  buildReportCategoryCallback,
+  parseReportCategoryCode,
+} from '../employee-reports/report-callback';
 
 interface DriverCacheEntry {
   userId: string;
@@ -1169,24 +1173,26 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         const jefeGrupoId =
           trip.servicio.jefe?.grupoTelegramId ||
           trip.servicio.empleada?.jefe?.grupoTelegramId;
-        if (trip.servicio.telegramThreadId && jefeGrupoId) {
+        const telegramThreadId = trip.servicio.telegramThreadId;
+        if (telegramThreadId && jefeGrupoId) {
           promises.push(
-            ctx.telegram
-              .deleteForumTopic(
+            (async () => {
+              const threadId = parseInt(telegramThreadId, 10);
+              await ctx.telegram.sendMessage(
                 jefeGrupoId,
-                parseInt(trip.servicio.telegramThreadId, 10),
-              )
-              .then(() => {
-                console.log(
-                  `[onConfChoferFinalizoViaje] Forum topic ${trip.servicio.telegramThreadId} eliminado con éxito.`,
-                );
-              })
-              .catch((err) => {
-                console.error(
-                  'Error al eliminar forum topic al finalizar viaje de regreso:',
-                  err,
-                );
-              }),
+                `La empleada ${trip.servicio.empleada.nombreArtistico} llegó a su destino. El servicio quedó completado.`,
+                { message_thread_id: threadId },
+              );
+              await ctx.telegram.deleteForumTopic(jefeGrupoId, threadId);
+              await this.dataSource
+                .getRepository(Servicios)
+                .update(trip.servicio.id, { telegramThreadId: null });
+            })().catch((err) => {
+              console.error(
+                'Error al notificar o eliminar el tema al finalizar el viaje de regreso:',
+                err,
+              );
+            }),
           );
         }
       }
@@ -1201,15 +1207,6 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     await Promise.all(promises);
 
     if (trip.tipo === 'regreso') {
-      const bossChatId = trip.servicio.jefe?.telegramChatId;
-      if (bossChatId) {
-        await ctx.telegram
-          .sendMessage(
-            bossChatId,
-            `La empleada ${trip.servicio.empleada.nombreArtistico} llegó a su destino. El servicio quedó completado.`,
-          )
-          .catch(() => undefined);
-      }
       if (trip.servicio.cliente?.telegramChatId) {
         await ctx.telegram
           .sendMessage(
@@ -1248,9 +1245,14 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     try {
       await ctx.editMessageText(messageText, {
         parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([[
-          Markup.button.callback('⚠️ Reportar empleada', `er_driver_start:${trip.servicio.id}`),
-        ]]),
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '⚠️ Reportar empleada',
+              `er_driver_start:${trip.servicio.id}`,
+            ),
+          ],
+        ]),
       });
     } catch (err) {
       console.error('Error actualizando mensaje de finalización:', err);
@@ -1329,14 +1331,16 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
   }
 
   private driverReportLabel(category: ReportCategory): string {
-    return ({
-      trato_inadecuado: 'Trato inadecuado',
-      demora_impuntualidad: 'Demora o impuntualidad',
-      incumplimiento: 'Incumplimiento',
-      cobro: 'Cobro',
-      seguridad: 'Seguridad',
-      otro: 'Otro',
-    } as Record<ReportCategory, string>)[category];
+    return (
+      {
+        trato_inadecuado: 'Trato inadecuado',
+        demora_impuntualidad: 'Demora o impuntualidad',
+        incumplimiento: 'Incumplimiento',
+        cobro: 'Cobro',
+        seguridad: 'Seguridad',
+        otro: 'Otro',
+      } as Record<ReportCategory, string>
+    )[category];
   }
 
   @Action(/^er_driver_start:(.+)$/)
@@ -1357,7 +1361,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         ...categories.map((category) => [
           Markup.button.callback(
             this.driverReportLabel(category),
-            `er_driver_cat:${serviceId}:${category}`,
+            buildReportCategoryCallback('driver', serviceId, category),
           ),
         ]),
         [Markup.button.callback('❌ Cancelar', 'er_driver_cancel')],
@@ -1365,17 +1369,22 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     );
   }
 
-  @Action(/^er_driver_cat:([^:]+):(trato_inadecuado|demora_impuntualidad|incumplimiento|cobro|seguridad|otro)$/)
+  @Action(/^erd:([^:]+):([tdicso])$/)
   async onDriverReportCategory(@Ctx() ctx: Context) {
     await ctx.answerCbQuery();
     const match = (ctx as any).match;
     const session = ((ctx as any).session ||= {});
+    const category = parseReportCategoryCode(match[2]);
+    if (!category) {
+      await ctx.reply('La categoría seleccionada no es válida.');
+      return;
+    }
     session.step = 'AWAITING_DRIVER_REPORT_DESCRIPTION';
     session.reportServiceId = match[1];
-    session.reportCategory = match[2];
+    session.reportCategory = category;
     delete session.reportDescription;
     await ctx.reply(
-      `Describe brevemente lo ocurrido para la categoría “${this.driverReportLabel(match[2])}”.`,
+      `Describe brevemente lo ocurrido para la categoría “${this.driverReportLabel(category)}”.`,
     );
   }
 
@@ -1391,10 +1400,12 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     session.reportDescription = description;
     await ctx.reply(
       `Confirma tu reporte:\n\nCategoría: ${this.driverReportLabel(session.reportCategory)}\nDescripción: ${description}`,
-      Markup.inlineKeyboard([[
-        Markup.button.callback('✅ Enviar', 'er_driver_confirm'),
-        Markup.button.callback('❌ Cancelar', 'er_driver_cancel'),
-      ]]),
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback('✅ Enviar', 'er_driver_confirm'),
+          Markup.button.callback('❌ Cancelar', 'er_driver_cancel'),
+        ],
+      ]),
     );
   }
 
@@ -1403,8 +1414,15 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     await ctx.answerCbQuery();
     const telegramId = ctx.from?.id.toString();
     const session = (ctx as any).session;
-    if (!telegramId || !session?.reportServiceId || !session.reportCategory || !session.reportDescription) {
-      await ctx.reply('La sesión del reporte expiró. Inicia el proceso nuevamente.');
+    if (
+      !telegramId ||
+      !session?.reportServiceId ||
+      !session.reportCategory ||
+      !session.reportDescription
+    ) {
+      await ctx.reply(
+        'La sesión del reporte expiró. Inicia el proceso nuevamente.',
+      );
       return;
     }
     try {
@@ -1415,9 +1433,13 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         session.reportDescription,
       );
       (ctx as any).session = {};
-      await ctx.editMessageText('✅ Recibimos tu reporte. Un administrador lo revisará.');
+      await ctx.editMessageText(
+        '✅ Recibimos tu reporte. Un administrador lo revisará.',
+      );
     } catch (error: any) {
-      await ctx.reply(`No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`);
+      await ctx.reply(
+        `No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`,
+      );
     }
   }
 

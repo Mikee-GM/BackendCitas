@@ -159,6 +159,21 @@ export class Servicios {
   @ApiProperty({ description: 'Total de transporte', example: 100.0 })
   totalTransporte: number;
 
+  @Column('uuid', { name: 'preset_location_id', nullable: true })
+  presetLocationId: string | null;
+
+  @Column('varchar', { name: 'location_name_snapshot', length: 80, nullable: true })
+  locationNameSnapshot: string | null;
+
+  @Column('varchar', { name: 'location_address_snapshot', length: 240, nullable: true })
+  locationAddressSnapshot: string | null;
+
+  @Column('numeric', { name: 'customer_transport_charge', precision: 10, scale: 2, nullable: true, transformer: new ColumnNumericTransformer() })
+  customerTransportCharge: number | null;
+
+  @Column('numeric', { name: 'actual_transport_cost', precision: 10, scale: 2, default: 0, transformer: new ColumnNumericTransformer() })
+  actualTransportCost: number;
+
   @Column('varchar', {
     name: 'estado_liquidacion',
     length: 30,

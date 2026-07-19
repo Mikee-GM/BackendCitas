@@ -1,5 +1,5 @@
 import { Inject, forwardRef } from '@nestjs/common';
-import { Update, Ctx, Action, On } from 'nestjs-telegraf';
+import { Update, Ctx, Action } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -213,57 +213,6 @@ export class TelegramAdminUpdate {
     }
   }
 
-  @Action(/^uber_attach:(.+)$/)
-  async onUberAttach(@Ctx() ctx: Context) {
-    const actor = await this.getActor(ctx);
-    if (!actor)
-      return ctx.answerCbQuery('Usuario no autorizado', { show_alert: true });
-    const tripId = (ctx as any).match[1];
-    (ctx as any).session = {
-      ...(ctx as any).session,
-      step: 'AWAITING_UBER_SCREENSHOT',
-      uberTripId: tripId,
-    };
-    await ctx.answerCbQuery();
-    await ctx.reply(
-      '📸 Envía ahora la captura de pantalla con los datos del Uber.',
-    );
-  }
-
-  @On('photo')
-  async onUberPhoto(@Ctx() ctx: Context) {
-    const session = (ctx as any).session;
-    if (session?.step !== 'AWAITING_UBER_SCREENSHOT') return;
-    const actor = await this.getActor(ctx);
-    if (!actor) return;
-    const photos = (ctx.message as any)?.photo;
-    const fileId = photos?.[photos.length - 1]?.file_id;
-    if (!fileId) return;
-    try {
-      await this.servicesService.saveUberScreenshot(
-        session.uberTripId,
-        actor.id,
-        fileId,
-      );
-      session.step = 'AWAITING_UBER_FARE_ACTION';
-      await ctx.reply(
-        '✅ Captura guardada. Cuando tengas el costo final, pulsa el botón para introducir la tarifa.',
-        {
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback(
-                '💵 Introducir tarifa',
-                `uber_fare_enter:${session.uberTripId}`,
-              ),
-            ],
-          ]),
-        },
-      );
-    } catch (error: any) {
-      await ctx.reply(`❌ ${error.message}`);
-    }
-  }
-
   @Action(/^uber_fare_enter:(.+)$/)
   async onUberFareEnter(@Ctx() ctx: Context) {
     const actor = await this.getActor(ctx);
@@ -279,8 +228,8 @@ export class TelegramAdminUpdate {
       pendingUberFare: undefined,
     };
     await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      '💵 Escribe ahora el costo final del Uber, por ejemplo: 185.50',
+    await ctx.reply(
+      'Escribe ahora el costo final del Uber, por ejemplo: 185.50',
     );
   }
 
@@ -305,17 +254,7 @@ export class TelegramAdminUpdate {
       (ctx as any).session = {};
       await ctx.answerCbQuery('Costo registrado');
       await ctx.editMessageText(
-        '✅ Costo del Uber registrado y total actualizado.',
-        {
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback(
-                '🚗 Uber en camino',
-                `jefe_uber_estado:${(ctx as any).match[1]}:en_camino`,
-              ),
-            ],
-          ]),
-        },
+        'Costo del Uber registrado y liquidación actualizada.',
       );
     } catch (error: any) {
       await ctx.answerCbQuery(error.message, { show_alert: true });

@@ -26,6 +26,7 @@ import { ExtrasServicio } from '../service-extras/entities/service-extra.entity'
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
 import { EmployeeReportsModule } from '../employee-reports/employee-reports.module';
 import { ExtensionsModule } from '../extensions/extensions.module';
+import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { ExtensionsModule } from '../extensions/extensions.module';
     forwardRef(() => ServicesModule),
     EmployeeReportsModule,
     ExtensionsModule,
+    TransportOperationsModule,
     TelegrafModule.forRootAsync({
       imports: [ConfigModule, TypeOrmModule.forFeature([TelegramSession])],
       useFactory: (

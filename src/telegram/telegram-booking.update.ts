@@ -33,7 +33,12 @@ import { AiMessageService } from '../ai/ai-message.service';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
 import { EmployeeReportsService } from '../employee-reports/employee-reports.service';
 import { ReportCategory } from '../employee-reports/entities/employee-report.entity';
+import {
+  buildReportCategoryCallback,
+  parseReportCategoryCode,
+} from '../employee-reports/report-callback';
 import { ExtensionsService } from '../extensions/extensions.service';
+import { TransportOperationsService } from '../transport-operations/transport-operations.service';
 
 interface SessionData {
   step?:
@@ -55,6 +60,10 @@ interface SessionData {
   reportDescription?: string;
   uberTripId?: string;
   pendingUberFare?: number;
+  presetLocationId?: string;
+  locationNameSnapshot?: string;
+  locationAddressSnapshot?: string;
+  customerTransportCharge?: number;
   chatHistory?: { role: 'user' | 'model'; parts: { text: string }[] }[];
   extraSelection?: {
     servicioId: string;
@@ -172,6 +181,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly aiMessageService: AiMessageService,
     private readonly employeeReportsService: EmployeeReportsService,
     private readonly extensionsService: ExtensionsService,
+    private readonly transportOperations: TransportOperationsService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
     this.locationCleanupInterval = setInterval(() => {
@@ -446,8 +456,44 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       console.error('Error al editar mensaje de pago:', err);
     }
 
-    // Enviar el teclado nativo para compartir ubicación
-    await this.replyWithLocationKeyboard(ctx, clientMessages.locationRequest());
+    await this.replyWithServiceLocationOptions(ctx);
+  }
+
+  @Action(/^service_location:(external|[0-9a-f-]{36})$/)
+  async onSelectServiceLocation(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    if (ctx.session?.step !== 'AWAITING_LOCATION') {
+      await ctx.reply('No hay un proceso de contratación activo.');
+      return;
+    }
+    const id = (ctx as any).match[1] as string;
+    if (id === 'external') {
+      const configuration = await this.transportOperations.getConfiguration();
+      ctx.session.presetLocationId = undefined;
+      ctx.session.locationNameSnapshot = undefined;
+      ctx.session.locationAddressSnapshot = undefined;
+      ctx.session.customerTransportCharge = Number(configuration.externalLocationFee);
+      await this.replyWithLocationKeyboard(
+        ctx,
+        'Perfecto. En ese caso, mándame el pin del lugar donde quieres que nos encontremos.',
+      );
+      return;
+    }
+    const location = (await this.transportOperations.activeLocations()).find((item) => item.id === id);
+    if (!location) {
+      await ctx.reply('La ubicación seleccionada ya no está disponible.');
+      return;
+    }
+    ctx.session.presetLocationId = location.id;
+    ctx.session.locationNameSnapshot = location.name;
+    ctx.session.locationAddressSnapshot = location.address;
+    ctx.session.customerTransportCharge = 0;
+    await this.onLocation(ctx, {
+      latitude: Number(location.latitude),
+      longitude: Number(location.longitude),
+      title: location.name,
+      address: location.address,
+    });
   }
 
   private async replyWithLocationKeyboard(
@@ -461,6 +507,27 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ])
         .oneTime()
         .resize(),
+    });
+  }
+
+  private async replyWithServiceLocationOptions(
+    ctx: BotContext,
+    introduction =
+      'Oye, mira: te voy a mostrar unas opciones para que me digas dónde quieres que nos encontremos. Elige la que te quede mejor y, si ninguna te sirve, selecciona “Otra ubicación”.',
+  ): Promise<void> {
+    const locations = await this.transportOperations.activeLocations();
+    const rows = locations.map((location) => [
+      Markup.button.callback(location.name, `service_location:${location.id}`),
+    ]);
+    rows.push([
+      Markup.button.callback(
+        'Otra ubicación',
+        'service_location:external',
+      ),
+    ]);
+    await ctx.reply(introduction, {
+      ...Markup.removeKeyboard(),
+      ...Markup.inlineKeyboard(rows),
     });
   }
 
@@ -803,7 +870,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   }
 
   @Action(/^eu:([^:]+):([if])$/)
-  async onEmployeeUberStatus(@Ctx() ctx: Context) {
+  async onEmployeeUberStatus(@Ctx() ctx: BotContext) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
     const user = await this.usuariosRepository.findOne({
@@ -831,10 +898,73 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           },
         );
       } else {
-        await ctx.editMessageText('✅ Tu llegada al destino quedó registrada.');
+        (ctx as any).session = {
+          ...(ctx.session ?? {}),
+          step: 'AWAITING_UBER_SCREENSHOT',
+          uberTripId: match[1],
+        };
+        await ctx
+          .editMessageText('Tu llegada quedó registrada.')
+          .catch(() => undefined);
+        await ctx.reply(
+          'Ahora necesito que me envíes una captura de pantalla del resumen del viaje de Uber, donde se vea el costo final.',
+        );
       }
     } catch (error: any) {
       await ctx.answerCbQuery(error.message, { show_alert: true });
+    }
+  }
+
+  @On('photo')
+  async onEmployeeUberScreenshot(@Ctx() ctx: BotContext) {
+    if (ctx.session?.step !== 'AWAITING_UBER_SCREENSHOT' || !ctx.session.uberTripId) return;
+    const telegramId = ctx.from?.id.toString();
+    const user = telegramId ? await this.usuariosRepository.findOne({ where: { telegramChatId: telegramId } }) : null;
+    const photos = (ctx.message as any)?.photo as Array<{ file_id: string }> | undefined;
+    const fileId = photos?.[photos.length - 1]?.file_id;
+    if (!user || !fileId) {
+      await ctx.reply('No fue posible procesar la captura. Intenta nuevamente.');
+      return;
+    }
+    try {
+      const trip = await this.servicesService.saveEmployeeUberScreenshot(
+        ctx.session.uberTripId,
+        user.id,
+        fileId,
+      );
+      ctx.session = {};
+      await ctx.reply('Captura enviada para validación.');
+      if (trip.tipo === 'ida' && trip.servicio.estado === 'en_curso') {
+        const serviceMessage = await ctx.reply(
+          `*Servicio en curso*\n\n` +
+            `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+            `• *Duración:* ${trip.servicio.duracionPactadaHoras} horas\n` +
+            `• *Método de pago:* ${trip.servicio.metodoPago.toUpperCase()}\n\n` +
+            `Cuando termine la actividad con el cliente, finaliza el servicio desde aquí.`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  'Finalizar servicio',
+                  `finalizar_servicio:${trip.servicio.id}`,
+                ),
+              ],
+              [
+                Markup.button.callback(
+                  'Agregar extra',
+                  `agregar_extra_list:${trip.servicio.id}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        await this.serviciosRepository.update(trip.servicio.id, {
+          telegramEmpleadaMensajeId: serviceMessage.message_id.toString(),
+        });
+      }
+    } catch (error: any) {
+      await ctx.reply(error.message || 'No fue posible guardar la captura.');
     }
   }
 
@@ -909,6 +1039,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     servicio.proximoRecordatorioRegresoAt = new Date(Date.now() + 5 * 60_000);
     await this.serviciosRepository.save(servicio);
 
+    const servicioConTotal =
+      (await this.serviciosRepository.findOne({
+        where: { id: servicio.id },
+      })) ?? servicio;
+
     const empleadaPromise = (async () => {
       try {
         if (servicio.empleadaId) {
@@ -928,12 +1063,26 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     await ctx.answerCbQuery('🏁 Servicio finalizado con éxito.');
 
-    // El importe aún no es definitivo: falta definir el transporte de regreso.
+    const totalFinal = Number(servicioConTotal.totalFinal);
+    const cargoTransporte = Number(
+      servicioConTotal.customerTransportCharge ??
+        servicioConTotal.totalTransporte ??
+        0,
+    );
+    const formatoMoneda = new Intl.NumberFormat('es-MX', {
+      style: 'currency',
+      currency: 'MXN',
+    });
     const resumenEmpText =
-      `✅ *Actividad con el cliente finalizada*\n\n` +
+      `*Actividad con el cliente finalizada*\n\n` +
       `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
       `• *Duración Real:* ${duracionFormatted}\n` +
-      `\nEl monto definitivo se mostrará cuando se confirme el transporte de regreso.`;
+      `• *Servicio pactado:* ${formatoMoneda.format(Number(servicioConTotal.totalBase))}\n` +
+      (cargoTransporte > 0
+        ? `• *Cargo de transporte:* ${formatoMoneda.format(cargoTransporte)}\n`
+        : `• *Cargo de transporte:* Sin costo\n`) +
+      `• *Método de pago:* ${servicioConTotal.metodoPago.toUpperCase()}\n\n` +
+      `*Total que debes cobrar al cliente: ${formatoMoneda.format(totalFinal)}*`;
 
     try {
       await ctx.editMessageText(resumenEmpText, { parse_mode: 'Markdown' });
@@ -1025,7 +1174,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     if (rating >= 3) {
       await ctx.editMessageText(
         `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!`,
-        Markup.inlineKeyboard([[Markup.button.callback('⚠️ Reportar empleada', `er_client_start:${servicioId}`)]]),
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '⚠️ Reportar empleada',
+              `er_client_start:${servicioId}`,
+            ),
+          ],
+        ]),
       );
       await ctx.reply('¡Agradecemos tu preferencia!', Markup.removeKeyboard());
     } else {
@@ -1045,17 +1201,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   }
 
   private reportCategoryLabel(category: ReportCategory): string {
-    return ({
-      trato_inadecuado: 'Trato inadecuado',
-      demora_impuntualidad: 'Demora o impuntualidad',
-      incumplimiento: 'Incumplimiento',
-      cobro: 'Cobro',
-      seguridad: 'Seguridad',
-      otro: 'Otro',
-    } as Record<ReportCategory, string>)[category];
+    return (
+      {
+        trato_inadecuado: 'Trato inadecuado',
+        demora_impuntualidad: 'Demora o impuntualidad',
+        incumplimiento: 'Incumplimiento',
+        cobro: 'Cobro',
+        seguridad: 'Seguridad',
+        otro: 'Otro',
+      } as Record<ReportCategory, string>
+    )[category];
   }
 
-  private reportCategoryKeyboard(prefix: string, serviceId: string) {
+  private reportCategoryKeyboard(serviceId: string) {
     const categories: ReportCategory[] = [
       'trato_inadecuado',
       'demora_impuntualidad',
@@ -1068,7 +1226,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ...categories.map((category) => [
         Markup.button.callback(
           this.reportCategoryLabel(category),
-          `${prefix}_cat:${serviceId}:${category}`,
+          buildReportCategoryCallback('client', serviceId, category),
         ),
       ]),
       [Markup.button.callback('❌ Cancelar', 'er_client_cancel')],
@@ -1082,18 +1240,23 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     if (!serviceId) return;
     await ctx.reply(
       'Selecciona la categoría que mejor describe lo ocurrido:',
-      this.reportCategoryKeyboard('er_client', serviceId),
+      this.reportCategoryKeyboard(serviceId),
     );
   }
 
-  @Action(/^er_client_cat:([^:]+):(trato_inadecuado|demora_impuntualidad|incumplimiento|cobro|seguridad|otro)$/)
+  @Action(/^erc:([^:]+):([tdicso])$/)
   async onClientReportCategory(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
     const match = (ctx as any).match;
     ctx.session = ctx.session || {};
+    const category = parseReportCategoryCode(match[2]);
+    if (!category) {
+      await ctx.reply('La categoría seleccionada no es válida.');
+      return;
+    }
     ctx.session.step = 'AWAITING_CLIENT_REPORT_DESCRIPTION';
     ctx.session.reportServiceId = match[1];
-    ctx.session.reportCategory = match[2] as ReportCategory;
+    ctx.session.reportCategory = category;
     delete ctx.session.reportDescription;
     await ctx.reply(
       `Describe brevemente lo ocurrido para la categoría “${this.reportCategoryLabel(ctx.session.reportCategory)}”.`,
@@ -1105,8 +1268,15 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     await ctx.answerCbQuery();
     const telegramId = ctx.from?.id.toString();
     const session = ctx.session;
-    if (!telegramId || !session?.reportServiceId || !session.reportCategory || !session.reportDescription) {
-      await ctx.reply('La sesión del reporte expiró. Inicia el proceso nuevamente.');
+    if (
+      !telegramId ||
+      !session?.reportServiceId ||
+      !session.reportCategory ||
+      !session.reportDescription
+    ) {
+      await ctx.reply(
+        'La sesión del reporte expiró. Inicia el proceso nuevamente.',
+      );
       return;
     }
     try {
@@ -1117,9 +1287,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         session.reportDescription,
       );
       ctx.session = {};
-      await ctx.editMessageText('✅ Recibimos tu reporte. Un administrador lo revisará.');
+      await ctx.editMessageText(
+        '✅ Recibimos tu reporte. Un administrador lo revisará.',
+      );
     } catch (error: any) {
-      await ctx.reply(`No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`);
+      await ctx.reply(
+        `No fue posible registrar el reporte: ${error?.message || 'intenta nuevamente'}`,
+      );
     }
   }
 
@@ -1131,24 +1305,37 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   }
 
   @On(['location', 'venue', 'edited_message'])
-  async onLocation(@Ctx() ctx: BotContext) {
+  async onLocation(
+    @Ctx() ctx: BotContext,
+    selectedLocation?: {
+      latitude: number;
+      longitude: number;
+      title: string;
+      address: string;
+    },
+  ) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
-    const message =
-      ctx.message || ctx.editedMessage || (ctx.update as any).edited_message;
-    if (!message) return;
+    const message = selectedLocation
+      ? undefined
+      : ctx.message || ctx.editedMessage || (ctx.update as any).edited_message;
+    if (!selectedLocation && !message) return;
 
     let lat: string;
     let lng: string;
     let notasUbicacion: string | null = null;
 
-    if (message.venue) {
+    if (selectedLocation) {
+      lat = selectedLocation.latitude.toString();
+      lng = selectedLocation.longitude.toString();
+      notasUbicacion = `Lugar seleccionado: ${selectedLocation.title}\nDirección: ${selectedLocation.address}`;
+    } else if (message?.venue) {
       const venue = message.venue;
       lat = venue.location.latitude.toString();
       lng = venue.location.longitude.toString();
       notasUbicacion = `Lugar seleccionado: ${venue.title}\nDirección: ${venue.address}`;
-    } else if (message.location) {
+    } else if (message?.location) {
       const location = message.location;
       lat = location.latitude.toString();
       lng = location.longitude.toString();
@@ -1434,6 +1621,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           servicioPrevioId: servicioPrevioId || null,
           clienteTelegramId: telegramId,
           iaActiva: false,
+          presetLocationId: ctx.session?.presetLocationId ?? null,
+          locationNameSnapshot: ctx.session?.locationNameSnapshot ?? null,
+          locationAddressSnapshot: ctx.session?.locationAddressSnapshot ?? null,
+          customerTransportCharge: ctx.session?.customerTransportCharge ?? 0,
+          totalTransporte: ctx.session?.customerTransportCharge ?? 0,
         } as any);
         // 1. SAVE INICIAL (INSERT)
         await this.serviciosRepository.save(nuevoServicioEnc);
@@ -1566,6 +1758,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         notas: notasUbicacion,
         clienteTelegramId: telegramId,
         iaActiva: false,
+        presetLocationId: ctx.session?.presetLocationId ?? null,
+        locationNameSnapshot: ctx.session?.locationNameSnapshot ?? null,
+        locationAddressSnapshot: ctx.session?.locationAddressSnapshot ?? null,
+        customerTransportCharge: ctx.session?.customerTransportCharge ?? 0,
+        totalTransporte: ctx.session?.customerTransportCharge ?? 0,
       });
       // 1. SAVE INICIAL (INSERT)
       await this.serviciosRepository.save(nuevoServicio);
@@ -1748,9 +1945,12 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
-    if ((ctx.session?.step as string) === 'AWAITING_DRIVER_REPORT_DESCRIPTION') return;
+    if ((ctx.session?.step as string) === 'AWAITING_DRIVER_REPORT_DESCRIPTION')
+      return;
     if (ctx.session?.step === 'AWAITING_CLIENT_REPORT_DESCRIPTION') {
-      const description = ((ctx.message as { text?: string })?.text || '').trim();
+      const description = (
+        (ctx.message as { text?: string })?.text || ''
+      ).trim();
       if (description.length < 3 || description.length > 2000) {
         await ctx.reply('La descripción debe tener entre 3 y 2000 caracteres.');
         return;
@@ -1759,10 +1959,12 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.reply(
         `Confirma tu reporte:\n\nCategoría: ${this.reportCategoryLabel(ctx.session.reportCategory!)}\nDescripción: ${description}`,
         {
-          ...Markup.inlineKeyboard([[
-            Markup.button.callback('✅ Enviar', 'er_client_confirm'),
-            Markup.button.callback('❌ Cancelar', 'er_client_cancel'),
-          ]]),
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('✅ Enviar', 'er_client_confirm'),
+              Markup.button.callback('❌ Cancelar', 'er_client_cancel'),
+            ],
+          ]),
         },
       );
       return;
@@ -1928,15 +2130,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ctx.chat?.type === 'private' &&
       ctx.session?.step === 'AWAITING_LOCATION'
     ) {
-      await ctx.reply(
-        'Necesito que me mandes tu ubicación como tal, no la dirección escrita 📍 Toca el botón de abajo y envíame el pin desde Telegram.',
-        {
-          ...Markup.keyboard([
-            [Markup.button.locationRequest('📍 Compartir mi ubicación')],
-          ])
-            .oneTime()
-            .resize(),
-        },
+      await this.replyWithServiceLocationOptions(
+        ctx,
+        'Selecciona una ubicación disponible o elige otra ubicación para compartir un pin.',
       );
       return;
     }
@@ -2149,10 +2345,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       if (session.duracionPactadaHoras && session.metodoPago) {
         session.step = 'AWAITING_LOCATION';
         session.chatHistory = history;
-        await this.replyWithLocationKeyboard(
-          ctx,
-          clientMessages.locationRequest(),
-        );
+        await this.replyWithServiceLocationOptions(ctx);
         return;
       }
 
@@ -2192,7 +2385,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               history.push({ role: 'model', parts: [{ text: responseText }] });
               session.chatHistory = history;
 
-              await this.replyWithLocationKeyboard(ctx, responseText);
+              await this.replyWithServiceLocationOptions(
+                ctx,
+                responseText || 'Selecciona la ubicación del servicio.',
+              );
               return;
             }
           } catch (jsonErr) {
@@ -2347,12 +2543,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.reply(
         `Muchas gracias por tus comentarios. Valoramos mucho tu opinión para seguir mejorando.`,
         servicioId
-          ? Markup.inlineKeyboard([[
-              Markup.button.callback(
-                '⚠️ Reportar empleada',
-                `er_client_start:${servicioId}`,
-              ),
-            ]])
+          ? Markup.inlineKeyboard([
+              [
+                Markup.button.callback(
+                  '⚠️ Reportar empleada',
+                  `er_client_start:${servicioId}`,
+                ),
+              ],
+            ])
           : Markup.removeKeyboard(),
       );
       return;
@@ -2442,7 +2640,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    const extension = await this.extensionsService.requestServiceExtension(servicio.id, 10);
+    const extension = await this.extensionsService.requestServiceExtension(
+      servicio.id,
+      10,
+    );
     servicio.prorrogasUsadas = extension.extensionNumber;
     await ctx.answerCbQuery('Prórroga de 10 minutos concedida.');
 

@@ -117,6 +117,21 @@ export class Viajes {
   @ApiPropertyOptional({ description: 'File ID de la captura de Uber' })
   telegramUberFileId: string | null;
 
+  @Column('numeric', { name: 'driver_payout', precision: 10, scale: 2, default: 0, transformer: new ColumnNumericTransformer() })
+  driverPayout: number;
+
+  @Column('timestamp with time zone', { name: 'fare_confirmed_at', nullable: true })
+  fareConfirmedAt: Date | null;
+
+  @Column('uuid', { name: 'fare_confirmed_by_user_id', nullable: true })
+  fareConfirmedByUserId: string | null;
+
+  @Column('boolean', { name: 'fare_confirmation_override', default: false })
+  fareConfirmationOverride: boolean;
+
+  @Column('uuid', { name: 'driver_settlement_id', nullable: true })
+  driverSettlementId: string | null;
+
   @Column('timestamp with time zone', {
     name: 'hora_notificacion',
     default: () => 'now()',

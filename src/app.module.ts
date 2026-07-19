@@ -26,6 +26,8 @@ import { ApartmentsModule } from './apartments/apartments.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { UploadModule } from './upload/upload.module';
 import { EmployeeReportsModule } from './employee-reports/employee-reports.module';
+import { LiquidationsModule } from './liquidations/liquidations.module';
+import { TransportOperationsModule } from './transport-operations/transport-operations.module';
 
 @Module({
   imports: [
@@ -89,6 +91,8 @@ import { EmployeeReportsModule } from './employee-reports/employee-reports.modul
     EmployeePhotosModule,
     ApartmentsModule,
     EmployeeReportsModule,
+    LiquidationsModule,
+    TransportOperationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

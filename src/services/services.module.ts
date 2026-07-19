@@ -9,6 +9,8 @@ import { Usuarios } from '../users/entities/user.entity';
 import { TelegramModule } from '../telegram/telegram.module';
 import { AiModule } from '../ai/ai.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
+import { LiquidationsModule } from '../liquidations/liquidations.module';
+import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
 
 @Module({
   imports: [
@@ -16,6 +18,8 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
     forwardRef(() => TelegramModule),
     AiModule,
     LoyaltyModule,
+    LiquidationsModule,
+    TransportOperationsModule,
   ],
   controllers: [ServicesController],
   providers: [ServicesService],

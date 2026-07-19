@@ -21,6 +21,8 @@ import { Usuarios } from '../users/entities/user.entity';
 import { Choferes } from '../drivers/entities/driver.entity';
 import { AiMessageService } from '../ai/ai-message.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { OfficeLiquidationSyncService } from '../liquidations/office-liquidation-sync.service';
+import { EmployeeCashObligation } from '../transport-operations/entities/employee-cash-obligation.entity';
 
 @Injectable()
 export class ServicesService implements OnModuleInit, OnModuleDestroy {
@@ -54,7 +56,33 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     private readonly telegramService: TelegramService,
     private readonly aiMessageService: AiMessageService,
     private readonly loyaltyService: LoyaltyService,
+    private readonly liquidationSync: OfficeLiquidationSyncService,
   ) {}
+
+  private getServiceTopic(servicio: Servicios) {
+    const chatId =
+      servicio.jefe?.grupoTelegramId ||
+      servicio.empleada?.jefe?.grupoTelegramId;
+    const threadId = Number(servicio.telegramThreadId);
+    if (!chatId || !Number.isInteger(threadId) || threadId <= 0) return null;
+    return { chatId, threadId };
+  }
+
+  private async deleteServiceTopic(servicio: Servicios): Promise<void> {
+    const topic = this.getServiceTopic(servicio);
+    if (!topic) return;
+    try {
+      await this.bot.telegram.deleteForumTopic(topic.chatId, topic.threadId);
+      await this.serviciosRepository.update(servicio.id, {
+        telegramThreadId: null,
+      });
+    } catch (error) {
+      console.error(
+        `[ServicesService] No se pudo eliminar el tema ${topic.threadId} del servicio ${servicio.id}:`,
+        error,
+      );
+    }
+  }
 
   async create(createServiceDto: any): Promise<Servicios> {
     // Si no tiene jefeId especificado, asignamos el jefe correspondiente a la empleada
@@ -192,7 +220,11 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
 
   async update(id: string, updateData: any): Promise<Servicios> {
     await this.serviciosRepository.update(id, updateData);
-    return this.findOne(id);
+    const service = await this.findOne(id);
+    if (service.estado === 'finalizado') {
+      await this.liquidationSync.syncOfficeRecord(id);
+    }
+    return service;
   }
 
   async remove(id: string): Promise<{ deleted: boolean }> {
@@ -256,7 +288,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       choferId: null,
       tipo: 'ida',
       zona: 'domicilio',
-      tarifa: tipoTransporte === 'uber' ? 0 : 50.0,
+      tarifa: tipoTransporte === 'uber' ? 0 : this.driverPayoutFor(servicio),
+      driverPayout: tipoTransporte === 'uber' ? 0 : this.driverPayoutFor(servicio),
       estado: tipoTransporte === 'uber' ? 'aceptado' : 'notificado',
       proveedorTransporte: tipoTransporte,
     });
@@ -304,12 +337,14 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
 
           if (tipoTransporte === 'uber') {
             inlineButtons.unshift([
+              Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(servicio, 'ida')),
+            ], [
               Markup.button.callback(
-                '🚗 Voy en camino',
+                'Ya estoy en el Uber',
                 `eu:${viajeGuardado.id}:i`,
               ),
               Markup.button.callback(
-                '📍 Ya llegué',
+                'Ya llegué',
                 `eu:${viajeGuardado.id}:f`,
               ),
             ]);
@@ -362,23 +397,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     // 5. Iniciar despacho de choferes por proximidad
     let uberLink: string | undefined;
     if (tipoTransporte === 'uber') {
-      const latEmp = servicio.empleada?.ubicacionLat;
-      const lngEmp = servicio.empleada?.ubicacionLng;
-      const latCli = servicio.ubicacionClienteLat;
-      const lngCli = servicio.ubicacionClienteLng;
-
-      // m.uber.com/ul/ es el Universal Link oficial: abre la app si está instalada
-      // y hace fallback a la web móvil si no lo está.
-      // dropoff[nickname] es obligatorio para que el pin de destino aparezca en la app.
-      let uberBase = `https://m.uber.com/ul/?action=setPickup`;
-      uberBase += `&dropoff[latitude]=${latCli}&dropoff[longitude]=${lngCli}&dropoff[nickname]=Destino`;
-      if (latEmp && lngEmp) {
-        uberBase += `&pickup[latitude]=${latEmp}&pickup[longitude]=${lngEmp}&pickup[nickname]=Recoger%20Empleada`;
-      } else {
-        // Sin ubicación de empleada, Uber usará la ubicación actual del usuario
-        uberBase += `&pickup=my_location`;
-      }
-      uberLink = uberBase;
+      uberLink = undefined;
     } else {
       try {
         await this.dispatchViaje(viajeGuardado.id);
@@ -780,13 +799,14 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     };
     this.realtimeEventsService.emitToBoss(viaje.servicio.jefeId, event);
 
-    const bossChatId = viaje.servicio.jefe?.telegramChatId;
-    if (!bossChatId) return;
+    const topic = this.getServiceTopic(viaje.servicio);
+    if (!topic) return;
     await this.bot.telegram
       .sendMessage(
-        bossChatId,
+        topic.chatId,
         `⚠️ No se encontraron choferes disponibles para el viaje de ${viaje.tipo}. Puedes cambiar el método de transporte a Uber.`,
         {
+          message_thread_id: topic.threadId,
           ...Markup.inlineKeyboard([
             [
               Markup.button.callback(
@@ -1050,6 +1070,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       recordatoriosRegreso: 0,
       proximoRecordatorioRegresoAt: nextReminder,
     });
+    await this.liquidationSync.syncOfficeRecord(servicio.id);
     await this.sendReturnTransportPrompt(servicio, false);
   }
 
@@ -1057,11 +1078,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     servicio: Servicios,
     reminder: boolean,
   ): Promise<void> {
-    if (!servicio.jefe?.telegramChatId) return;
+    const topic = this.getServiceTopic(servicio);
+    if (!topic) return;
     await this.bot.telegram.sendMessage(
-      servicio.jefe.telegramChatId,
+      topic.chatId,
       `${reminder ? '⏰ *Recordatorio*\n\n' : ''}La empleada *${servicio.empleada?.nombreArtistico || ''}* finalizó el servicio. ¿Cómo será su viaje de regreso?`,
       {
+        message_thread_id: topic.threadId,
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [
@@ -1162,7 +1185,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             choferId: null,
             tipo: 'regreso',
             zona: 'domicilio',
-            tarifa: provider === 'uber' ? 0 : 50,
+            tarifa: provider === 'uber' ? 0 : this.driverPayoutFor(servicio),
+            driverPayout: provider === 'uber' ? 0 : this.driverPayoutFor(servicio),
             estado: provider === 'uber' ? 'aceptado' : 'notificado',
             proveedorTransporte: provider,
           }),
@@ -1181,6 +1205,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         return { trip, servicio };
       },
     );
+    await this.liquidationSync.syncOfficeRecord(result.servicio.id);
 
     if (provider === 'interno') {
       await this.dispatchViaje(result.trip.id);
@@ -1195,10 +1220,17 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       type: 'return_transport_selected',
       data: { serviceId: result.servicio.id, trip: result.trip },
     });
-    return {
-      trip: result.trip,
-      uberLink: this.buildUberLink(result.servicio),
-    };
+    const employee = await this.serviciosRepository.findOne({ where: { id: result.servicio.id }, relations: { empleada: { usuario: true } } });
+    const employeeChatId = employee?.empleada?.usuario?.telegramChatId;
+    if (employeeChatId && employee) {
+      await this.bot.telegram.sendMessage(employeeChatId, 'Solicita tu viaje de regreso y confirma cada etapa.', {
+        ...Markup.inlineKeyboard([
+          [Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(employee, 'regreso'))],
+          [Markup.button.callback('Ya estoy en el Uber', `eu:${result.trip.id}:i`), Markup.button.callback('Ya llegué', `eu:${result.trip.id}:f`)],
+        ]),
+      });
+    }
+    return { trip: result.trip };
   }
 
   private buildUberLink(servicio: Servicios): string {
@@ -1260,7 +1292,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         trip.horaInicioViaje = null;
         trip.horaFinViaje = null;
         trip.estado = provider === 'uber' ? 'aceptado' : 'notificado';
-        trip.tarifa = provider === 'uber' ? 0 : 50;
+        trip.tarifa = provider === 'uber' ? 0 : this.driverPayoutFor(servicio);
+        trip.driverPayout = provider === 'uber' ? 0 : this.driverPayoutFor(servicio);
         await manager.save(Viajes, trip);
 
         if (trip.tipo === 'regreso') {
@@ -1279,6 +1312,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       relations: { empleada: { usuario: true }, jefe: true },
     });
     if (!servicio) throw new NotFoundException('Servicio no encontrado');
+    await this.liquidationSync.syncOfficeRecord(servicio.id);
 
     let uberLink: string | undefined;
     if (provider === 'interno') {
@@ -1296,13 +1330,14 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             `El viaje de ${result.trip.tipo} cambió a Uber. Usa los botones para actualizar tu trayecto.`,
             {
               ...Markup.inlineKeyboard([
+                [Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(servicio, result.trip.tipo))],
                 [
                   Markup.button.callback(
-                    '🚗 Voy en camino',
+                    'Ya estoy en el Uber',
                     `eu:${result.trip.id}:i`,
                   ),
                   Markup.button.callback(
-                    '📍 Ya llegué',
+                    'Ya llegué',
                     `eu:${result.trip.id}:f`,
                   ),
                 ],
@@ -1321,7 +1356,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         provider,
       },
     });
-    return { trip: result.trip, uberLink };
+    return { trip: result.trip, uberLink: undefined };
   }
 
   private buildUberLinkForTrip(
@@ -1329,12 +1364,6 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     tripType: 'ida' | 'regreso',
   ): string {
     const ida = tripType === 'ida';
-    const pickupLat = ida
-      ? servicio.empleada?.ubicacionLat
-      : servicio.ubicacionClienteLat;
-    const pickupLng = ida
-      ? servicio.empleada?.ubicacionLng
-      : servicio.ubicacionClienteLng;
     const dropoffLat = ida
       ? servicio.ubicacionClienteLat
       : servicio.empleada?.ubicacionLat;
@@ -1343,9 +1372,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       : servicio.empleada?.ubicacionLng;
     return (
       'https://m.uber.com/ul/?action=setPickup' +
-      `&pickup[latitude]=${pickupLat}&pickup[longitude]=${pickupLng}` +
+      '&pickup=my_location' +
       `&dropoff[latitude]=${dropoffLat}&dropoff[longitude]=${dropoffLng}`
     );
+  }
+
+  private driverPayoutFor(service: Servicios): number {
+    return service.presetLocationId ? 60 : Number(service.customerTransportCharge ?? service.totalTransporte ?? 0) / 2;
   }
 
   async saveUberScreenshot(
@@ -1361,6 +1394,44 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         caption: `📱 Datos del Uber de ${trip.tipo === 'ida' ? 'ida' : 'regreso'}.`,
       });
     }
+  }
+
+  async saveEmployeeUberScreenshot(
+    tripId: string,
+    actorId: string,
+    fileId: string,
+  ): Promise<Viajes> {
+    const trip = await this.viajesRepository.findOne({
+      where: { id: tripId },
+      relations: { servicio: { cliente: true, empleada: true, jefe: true } },
+    });
+    if (!trip || trip.proveedorTransporte !== 'uber') {
+      throw new NotFoundException('Viaje Uber no encontrado');
+    }
+    const actor = await this.usuariosRepository.findOneBy({ id: actorId });
+    if (actor?.rol !== 'empleada' || trip.servicio.empleada?.usuarioId !== actor.id) {
+      throw new ConflictException('Solo la empleada asignada puede enviar la captura');
+    }
+    if (trip.estado !== 'finalizado') {
+      throw new ConflictException('Primero confirma tu llegada al destino');
+    }
+    await this.viajesRepository.update(trip.id, { telegramUberFileId: fileId });
+    const topic = this.getServiceTopic(trip.servicio);
+    if (topic) {
+      await this.bot.telegram.sendPhoto(topic.chatId, fileId, {
+        message_thread_id: topic.threadId,
+        caption: `Resumen del Uber de ${trip.tipo}. Revisa la captura y registra el costo final.`,
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              'Introducir tarifa',
+              `uber_fare_enter:${trip.id}`,
+            ),
+          ],
+        ]),
+      });
+    }
+    return trip;
   }
 
   async saveUberScreenshotFromDashboard(
@@ -1409,14 +1480,47 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const trip = await this.getAuthorizedUberTrip(tripId, actorId);
-    if (['en_curso', 'finalizado', 'cancelado'].includes(trip.estado)) {
+    if (trip.estado === 'cancelado') {
+      throw new ConflictException('La tarifa no puede registrarse en un viaje cancelado');
+    }
+    const actor = await this.usuariosRepository.findOneBy({ id: actorId });
+    if (!actor) throw new ConflictException('Usuario no autorizado');
+    const settledCashObligation =
+      await this.serviciosRepository.manager
+        .getRepository(EmployeeCashObligation)
+        .findOneBy({ serviceId: trip.servicioId, status: 'paid' });
+    if (
+      settledCashObligation &&
+      trip.fareConfirmedAt &&
+      Number(trip.tarifa) !== amount
+    ) {
       throw new ConflictException(
-        'La tarifa no puede cambiarse cuando el viaje ya inició',
+        'La entrega de efectivo ya fue saldada; la corrección requiere un ajuste administrativo independiente',
       );
     }
-    await this.viajesRepository.update(trip.id, { tarifa: amount });
+    const override = !trip.telegramUberFileId && actor.rol === 'admin';
+    if (!trip.telegramUberFileId && !override) {
+      throw new ConflictException('La empleada debe enviar la captura antes de confirmar el costo');
+    }
+    await this.viajesRepository.update(trip.id, {
+      tarifa: amount,
+      fareConfirmedAt: new Date(),
+      fareConfirmedByUserId: actorId,
+      fareConfirmationOverride: override,
+    });
+    await this.liquidationSync.syncOfficeRecord(trip.servicioId);
     if (trip.tipo === 'regreso') {
       await this.sendFinalReceiptAndAward(trip.servicioId);
+      if (trip.estado === 'finalizado') {
+        setTimeout(() => {
+          this.deleteServiceTopic(trip.servicio).catch((error) =>
+            console.error(
+              `[ServicesService] No se pudo cerrar el tema del servicio ${trip.servicioId}:`,
+              error,
+            ),
+          );
+        }, 1500);
+      }
     }
     const updated = await this.serviciosRepository.findOneBy({
       id: trip.servicioId,
@@ -1477,7 +1581,12 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             `calificar_servicio:${servicio.id}:${rating}`,
           ),
         ]),
-        [Markup.button.callback('⚠️ Reportar empleada', `er_client_start:${servicio.id}`)],
+        [
+          Markup.button.callback(
+            '⚠️ Reportar empleada',
+            `er_client_start:${servicio.id}`,
+          ),
+        ],
       ]);
       try {
         if (servicio.telegramResumenDefinitivoId) {
@@ -1576,7 +1685,11 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     const trip = await this.viajesRepository.findOne({
       where: { id: tripId },
       relations: {
-        servicio: { cliente: true, empleada: { usuario: true }, jefe: true },
+        servicio: {
+          cliente: true,
+          empleada: { usuario: true, jefe: true },
+          jefe: true,
+        },
       },
     });
     if (!trip || trip.proveedorTransporte !== 'uber') {
@@ -1625,10 +1738,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       resultingState = 'llegado';
       await this.viajesRepository.update(trip.id, { estado: resultingState });
     } else if (action === 'employee_en_route') {
-      if (trip.estado !== 'llegado')
-        throw new ConflictException(
-          'Primero el jefe debe confirmar que el Uber llegó',
-        );
+      if (trip.estado !== 'aceptado')
+        throw new ConflictException('El viaje ya no puede iniciarse');
       resultingState = 'en_curso';
       await this.viajesRepository.update(trip.id, {
         estado: resultingState,
@@ -1648,6 +1759,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
           horaLlegadaCasa: now,
           estadoLiquidacion: 'cerrada',
         });
+        await this.liquidationSync.syncOfficeRecord(trip.servicioId);
       }
     }
 
@@ -1708,17 +1820,24 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       });
     }
     if (!bossAction) {
-      const bossChatId = trip.servicio.jefe?.telegramChatId;
-      if (bossChatId) {
+      const topic = this.getServiceTopic(trip.servicio);
+      if (topic) {
         const employeeName =
           trip.servicio.empleada?.nombreArtistico || 'La empleada';
         const message =
           action === 'employee_arrived'
             ? `La empleada ${employeeName} confirmó que llegó al destino del viaje de ${trip.tipo}.`
             : `La empleada ${employeeName} confirmó que ya está dentro del Uber de ${trip.tipo}.`;
-        await this.bot.telegram
-          .sendMessage(bossChatId, message)
-          .catch(() => undefined);
+        try {
+          await this.bot.telegram.sendMessage(topic.chatId, message, {
+            message_thread_id: topic.threadId,
+          });
+        } catch (error) {
+          console.error(
+            `[ServicesService] No se pudo notificar el estado del viaje en el tema ${topic.threadId}:`,
+            error,
+          );
+        }
       }
     }
     this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {

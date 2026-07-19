@@ -22,9 +22,11 @@ describe('ServicesService transport settlement', () => {
     telegram: {
       sendMessage: jest.fn(),
       editMessageText: jest.fn(),
+      deleteForumTopic: jest.fn(),
     },
   };
   const loyalty = { awardForFinalizedService: jest.fn() };
+  const liquidationSync = { syncOfficeRecord: jest.fn() };
 
   const service = new ServicesService(
     serviciosRepository as any,
@@ -36,6 +38,7 @@ describe('ServicesService transport settlement', () => {
     {} as any,
     {} as any,
     loyalty as any,
+    liquidationSync as any,
   );
 
   beforeEach(() => jest.clearAllMocks());
@@ -53,6 +56,7 @@ describe('ServicesService transport settlement', () => {
       tipo: 'regreso',
       servicioId: 'service',
       proveedorTransporte: 'uber',
+      telegramUberFileId: 'photo',
       servicio: { jefeId: 'boss', empleada: { usuario: {} } },
     });
     usuariosRepository.findOneBy.mockResolvedValue({ id: 'boss', rol: 'jefe' });
@@ -64,9 +68,7 @@ describe('ServicesService transport settlement', () => {
 
     await service.confirmUberFare('trip', 'boss', 185.5);
 
-    expect(viajesRepository.update).toHaveBeenCalledWith('trip', {
-      tarifa: 185.5,
-    });
+    expect(viajesRepository.update).toHaveBeenCalledWith('trip', expect.objectContaining({ tarifa: 185.5 }));
     expect(serviciosRepository.update).not.toHaveBeenCalled();
     expect(service.sendFinalReceiptAndAward).toHaveBeenCalledWith('service');
   });
@@ -74,7 +76,7 @@ describe('ServicesService transport settlement', () => {
   it('impide que otra empleada actualice el estado del Uber', async () => {
     viajesRepository.findOne.mockResolvedValue({
       id: 'trip',
-      estado: 'llegado',
+      estado: 'aceptado',
       proveedorTransporte: 'uber',
       servicio: {
         jefeId: 'boss',
@@ -167,6 +169,81 @@ describe('ServicesService transport settlement', () => {
     );
   });
 
+  it('envía la confirmación de la empleada al tema asignado', async () => {
+    viajesRepository.findOne.mockResolvedValue({
+      id: 'trip',
+      servicioId: 'service',
+      tipo: 'ida',
+      estado: 'aceptado',
+      proveedorTransporte: 'uber',
+      servicio: {
+        id: 'service',
+        jefeId: 'boss',
+        clienteId: 'client',
+        empleadaId: 'employee',
+        telegramThreadId: '77',
+        jefe: { grupoTelegramId: '-100123' },
+        empleada: {
+          nombreArtistico: 'Andrea',
+          usuarioId: 'employee-user',
+          usuario: {},
+        },
+      },
+    });
+    usuariosRepository.findOneBy.mockResolvedValue({
+      id: 'employee-user',
+      rol: 'empleada',
+    });
+
+    await service.updateUberStatus(
+      'trip',
+      'employee-user',
+      'employee_en_route',
+    );
+
+    expect(bot.telegram.sendMessage).toHaveBeenCalledWith(
+      '-100123',
+      expect.stringContaining('dentro del Uber de ida'),
+      { message_thread_id: 77 },
+    );
+  });
+
+  it('elimina el tema cuando termina el regreso en Uber', async () => {
+    viajesRepository.findOne.mockResolvedValue({
+      id: 'trip',
+      servicioId: 'service',
+      tipo: 'regreso',
+      estado: 'en_curso',
+      proveedorTransporte: 'uber',
+      servicio: {
+        id: 'service',
+        jefeId: 'boss',
+        clienteId: 'client',
+        empleadaId: 'employee',
+        telegramThreadId: '88',
+        jefe: { grupoTelegramId: '-100456' },
+        empleada: {
+          nombreArtistico: 'Andrea',
+          usuarioId: 'employee-user',
+          usuario: {},
+        },
+      },
+    });
+    usuariosRepository.findOneBy.mockResolvedValue({
+      id: 'employee-user',
+      rol: 'empleada',
+    });
+
+    await service.updateUberStatus('trip', 'employee-user', 'employee_arrived');
+
+    expect(bot.telegram.sendMessage).toHaveBeenCalledWith(
+      '-100456',
+      expect.stringContaining('llegó al destino del viaje de regreso'),
+      { message_thread_id: 88 },
+    );
+    expect(bot.telegram.deleteForumTopic).not.toHaveBeenCalled();
+  });
+
   it('cambia un viaje pendiente de chofer a Uber', async () => {
     const trip = {
       id: 'trip',
@@ -204,7 +281,7 @@ describe('ServicesService transport settlement', () => {
     expect(result.trip.proveedorTransporte).toBe('uber');
     expect(result.trip.estado).toBe('aceptado');
     expect(result.trip.tarifa).toBe(0);
-    expect(result.uberLink).toContain('pickup[latitude]=3');
+    expect(result.uberLink).toBeUndefined();
     expect(realtime.emitToBoss).toHaveBeenCalledWith(
       'boss',
       expect.objectContaining({ type: 'trip_transport_changed' }),
