@@ -88,4 +88,25 @@ describe('liquidation calculator', () => {
     expect(report.employeeCut.finesTotal).toBe(0);
     expect(report.discrepancy).toEqual({ exists: false, difference: 0 });
   });
+
+  it('calcula correctamente los nuevos campos detallados de liquidación', () => {
+    const result = calculateCut([
+      record({
+        serviceTotal: 2000,
+        paymentMethod: 'transferencia',
+        customerTransportCharge: 150,
+        companyTransportExpense: 100,
+        employeeUberReimbursement: 40,
+        electronicExtraAmount: 200,
+      }),
+    ]);
+
+    expect(result.totalCollected).toBe(2350);
+    expect(result.transferTotal).toBe(2000);
+    expect(result.companyCommission).toBe(800);
+    expect(result.companyTransportExpenses).toBe(60);
+    expect(result.employeeUberReimbursements).toBe(40);
+    expect(result.netTransportBalance).toBe(50);
+    expect(result.netCompanyShare).toBe(850);
+  });
 });

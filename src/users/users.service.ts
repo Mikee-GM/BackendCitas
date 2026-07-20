@@ -73,7 +73,15 @@ export class UsersService {
   }
 
   async update(id: string, updateUserDto: UpdateUserDto) {
-    await this.usuariosRepository.update(id, updateUserDto);
+    const { password, ...toUpdate } = updateUserDto;
+    const updateData: any = { ...toUpdate };
+
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      updateData.passwordHash = await bcrypt.hash(password, salt);
+    }
+
+    await this.usuariosRepository.update(id, updateData);
     return this.findOne(id);
   }
 

@@ -657,6 +657,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       .createQueryBuilder('chofer')
       .innerJoinAndSelect('chofer.usuario', 'usuario')
       .where('chofer.disponible = :disponible', { disponible: true })
+      .andWhere('usuario.activo = :usuarioActivo', { usuarioActivo: true })
       .andWhere('usuario.telegramChatId IS NOT NULL')
       .andWhere('chofer.ubicacionLat IS NOT NULL')
       .andWhere('chofer.ubicacionLng IS NOT NULL');

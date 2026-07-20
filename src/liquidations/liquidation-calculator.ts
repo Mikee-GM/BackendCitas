@@ -19,6 +19,12 @@ export interface CutResult {
   result: number;
   direction: 'employee_owes_company' | 'company_owes_employee' | 'settled';
   count: number;
+  totalCollected: number;
+  rawExtrasTotal: number;
+  netCompanyShare: number;
+  netTransportBalance: number;
+  transferTotal: number;
+  companyTransportExpenses: number;
 }
 
 const money = (value: number) =>
@@ -32,6 +38,7 @@ export function calculateCut(records: LiquidationRecord[]): CutResult {
   let transportTotal = 0;
   let cardTotal = 0;
   let calculatedExtras = 0;
+  let rawExtrasTotal = 0;
   let membershipTotal = 0;
   let promotionTotal = 0;
   let nearbyTripsCount = 0;
@@ -40,6 +47,7 @@ export function calculateCut(records: LiquidationRecord[]): CutResult {
   let employeeUberReimbursements = 0;
   let employeeCashDue = 0;
   let employeeShareTotal = 0;
+  let transferTotal = 0;
 
   for (const record of records) {
     if (record.isFine) {
@@ -82,9 +90,11 @@ export function calculateCut(records: LiquidationRecord[]): CutResult {
 
     const extra =
       Number(record.electronicExtraAmount ?? record.extraAmount) || 0;
+    rawExtrasTotal += extra;
     calculatedExtras += extra >= 1000 ? extra * 0.85 : extra;
 
     if (record.paymentMethod === 'efectivo') cashTotal += serviceTotal;
+    if (record.paymentMethod === 'transferencia') transferTotal += serviceTotal;
     if (record.paymentMethod === 'mixto') {
       cashTotal += Number(record.cashAmount) || 0;
     }
@@ -100,6 +110,15 @@ export function calculateCut(records: LiquidationRecord[]): CutResult {
     -(employeeShareTotal + calculatedExtras + employeeUberReimbursements) +
       finesTotal,
   );
+
+  const companyTransportExpenses = Math.max(
+    0,
+    transportTotal - employeeUberReimbursements,
+  );
+  const totalCollected =
+    salesTotal + customerTransportCharges + membershipTotal + rawExtrasTotal;
+  const netTransportBalance = customerTransportCharges - transportTotal;
+  const netCompanyShare = companyCommission + netTransportBalance;
 
   return {
     salesTotal: money(salesTotal),
@@ -125,6 +144,12 @@ export function calculateCut(records: LiquidationRecord[]): CutResult {
           ? 'company_owes_employee'
           : 'settled',
     count: records.length,
+    totalCollected: money(totalCollected),
+    rawExtrasTotal: money(rawExtrasTotal),
+    netCompanyShare: money(netCompanyShare),
+    netTransportBalance: money(netTransportBalance),
+    transferTotal: money(transferTotal),
+    companyTransportExpenses: money(companyTransportExpenses),
   };
 }
 

@@ -1,5 +1,5 @@
 import { Inject, forwardRef, BeforeApplicationShutdown } from '@nestjs/common';
-import { Update, Ctx, Action, On } from 'nestjs-telegraf';
+import { Update, Ctx, Action, On, Hears } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
@@ -1474,5 +1474,39 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     await ctx.answerCbQuery('Oferta rechazada.');
     await this.servicesService.rechazarOfertaManual(viajeId, chofer.id);
+  }
+
+  @Hears('🟢 Quedar Disponible')
+  async onQuedarDisponible(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const chofer = await this.getChoferFromCache(telegramId);
+    if (chofer.error) {
+      await ctx.reply('❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.');
+      return;
+    }
+
+    await this.dataSource.getRepository(Choferes).update(chofer.id, { disponible: true });
+    this.driverIdentityCache.delete(telegramId); // invalidate cache
+
+    await ctx.reply('🟢 Ahora estás registrado como DISPONIBLE. Recibirás solicitudes de viaje cuando estés cerca.');
+  }
+
+  @Hears('🔴 Quedar Inactivo')
+  async onQuedarInactivo(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const chofer = await this.getChoferFromCache(telegramId);
+    if (chofer.error) {
+      await ctx.reply('❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.');
+      return;
+    }
+
+    await this.dataSource.getRepository(Choferes).update(chofer.id, { disponible: false });
+    this.driverIdentityCache.delete(telegramId); // invalidate cache
+
+    await ctx.reply('🔴 Ahora estás INACTIVO. No se te asignarán solicitudes de viaje hasta que te pongas disponible.');
   }
 }

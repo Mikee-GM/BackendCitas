@@ -472,14 +472,18 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ctx.session.presetLocationId = undefined;
       ctx.session.locationNameSnapshot = undefined;
       ctx.session.locationAddressSnapshot = undefined;
-      ctx.session.customerTransportCharge = Number(configuration.externalLocationFee);
+      ctx.session.customerTransportCharge = Number(
+        configuration.externalLocationFee,
+      );
       await this.replyWithLocationKeyboard(
         ctx,
         'Perfecto. En ese caso, mándame el pin del lugar donde quieres que nos encontremos.',
       );
       return;
     }
-    const location = (await this.transportOperations.activeLocations()).find((item) => item.id === id);
+    const location = (await this.transportOperations.activeLocations()).find(
+      (item) => item.id === id,
+    );
     if (!location) {
       await ctx.reply('La ubicación seleccionada ya no está disponible.');
       return;
@@ -512,18 +516,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   private async replyWithServiceLocationOptions(
     ctx: BotContext,
-    introduction =
-      'Oye, mira: te voy a mostrar unas opciones para que me digas dónde quieres que nos encontremos. Elige la que te quede mejor y, si ninguna te sirve, selecciona “Otra ubicación”.',
+    introduction = 'Oye, mira: te voy a mostrar unas opciones para que me digas dónde quieres que nos encontremos. Elige la que te quede mejor y, si ninguna te sirve, selecciona “Otra ubicación”.',
   ): Promise<void> {
     const locations = await this.transportOperations.activeLocations();
     const rows = locations.map((location) => [
       Markup.button.callback(location.name, `service_location:${location.id}`),
     ]);
     rows.push([
-      Markup.button.callback(
-        'Otra ubicación',
-        'service_location:external',
-      ),
+      Markup.button.callback('Otra ubicación', 'service_location:external'),
     ]);
     await ctx.reply(introduction, {
       ...Markup.removeKeyboard(),
@@ -917,13 +917,25 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('photo')
   async onEmployeeUberScreenshot(@Ctx() ctx: BotContext) {
-    if (ctx.session?.step !== 'AWAITING_UBER_SCREENSHOT' || !ctx.session.uberTripId) return;
+    if (
+      ctx.session?.step !== 'AWAITING_UBER_SCREENSHOT' ||
+      !ctx.session.uberTripId
+    )
+      return;
     const telegramId = ctx.from?.id.toString();
-    const user = telegramId ? await this.usuariosRepository.findOne({ where: { telegramChatId: telegramId } }) : null;
-    const photos = (ctx.message as any)?.photo as Array<{ file_id: string }> | undefined;
+    const user = telegramId
+      ? await this.usuariosRepository.findOne({
+          where: { telegramChatId: telegramId },
+        })
+      : null;
+    const photos = (ctx.message as any)?.photo as
+      | Array<{ file_id: string }>
+      | undefined;
     const fileId = photos?.[photos.length - 1]?.file_id;
     if (!user || !fileId) {
-      await ctx.reply('No fue posible procesar la captura. Intenta nuevamente.');
+      await ctx.reply(
+        'No fue posible procesar la captura. Intenta nuevamente.',
+      );
       return;
     }
     try {
@@ -1466,9 +1478,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         });
 
         // Solo notificar si no estaba en caché (primera vez) y no está editada
-        if (!cached && !isEdited) {
+        if (!isEdited) {
           await ctx.reply(
-            `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}`,
+            `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}.\n\n` +
+              `⚠️ *IMPORTANTE:* Has enviado una ubicación estática. Recuerda compartir tu *Ubicación en tiempo real* (📎 -> Ubicación -> Compartir en tiempo real por 8h) para mantener el rastreo activo durante tu turno.`,
+            { parse_mode: 'Markdown' },
           );
         }
         return;
@@ -1500,9 +1514,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         });
 
         // Solo notificar si no estaba en caché (primera vez) y no está editada
-        if (!cached && !isEdited) {
+        if (!isEdited) {
           await ctx.reply(
-            `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}`,
+            `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}.\n\n` +
+              `⚠️ *IMPORTANTE:* Has enviado una ubicación estática. Recuerda compartir tu *Ubicación en tiempo real* (📎 -> Ubicación -> Compartir en tiempo real por 8h) para mantener el rastreo activo durante tu turno.`,
+            { parse_mode: 'Markdown' },
           );
         }
         return;

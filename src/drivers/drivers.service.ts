@@ -67,7 +67,7 @@ export class DriversService {
         usuarioId: usuarioGuardado.id,
         nombre,
         telefono,
-        disponible: disponible ?? false,
+        disponible: disponible ?? true,
         ubicacionLat: ubicacionLat ? Number(ubicacionLat) : null,
         ubicacionLng: ubicacionLng ? Number(ubicacionLng) : null,
         vehiculoMarca: vehiculoMarca || null,
@@ -149,6 +149,7 @@ export class DriversService {
       .createQueryBuilder('chofer')
       .innerJoinAndSelect('chofer.usuario', 'usuario')
       .where('chofer.disponible = :disponible', { disponible: true })
+      .andWhere('usuario.activo = :usuarioActivo', { usuarioActivo: true })
       .andWhere('usuario.telegramChatId IS NOT NULL')
       .andWhere('chofer.ubicacionLat IS NOT NULL')
       .andWhere('chofer.ubicacionLng IS NOT NULL')

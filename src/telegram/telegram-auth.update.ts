@@ -93,10 +93,21 @@ export class TelegramAuthUpdate {
     }
 
     if (user) {
+      let liveLocationReminder = '';
+      if (user.rol === 'chofer' || user.rol === 'empleada') {
+        liveLocationReminder = `\n\n📍 *Recordatorio:* Recuerda compartir tu *Ubicación en tiempo real* (Live Location) usando el botón de adjuntar (📎 -> Ubicación -> Compartir ubicación en tiempo real por 8h). NO envíes ubicación estática.`;
+      }
       await ctx.reply(
         `¡Hola de nuevo! Estás autenticado como ${user.email} (Rol: ${user.rol.toUpperCase()}).\n` +
-          `¿Qué deseas hacer hoy?`,
-        user.rol === 'empleada' ? this.employeeMenu() : undefined,
+          `¿Qué deseas hacer hoy?${liveLocationReminder}`,
+        {
+          parse_mode: 'Markdown',
+          ...(user.rol === 'empleada'
+            ? this.employeeMenu()
+            : user.rol === 'chofer'
+              ? this.driverMenu()
+              : {}),
+        },
       );
       return;
     }
@@ -183,36 +194,19 @@ export class TelegramAuthUpdate {
 
     if (user.rol === 'chofer' || user.rol === 'empleada') {
       await ctx.reply(
-        `📍 Por favor, comparte tu ubicación en tiempo real utilizando el botón de abajo para poder recibir y gestionar servicios.`,
-        user.rol === 'empleada'
-          ? this.employeeMenu()
-          : Markup.keyboard([
-              [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
-            ]).resize(),
+        `📍 *IMPORTANTE: Compartir Ubicación en Tiempo Real*\n\n` +
+          `Para recibir y gestionar servicios correctamente, debes compartir tu *Ubicación en tiempo real* (Live Location):\n\n` +
+          `1. Toca el botón de adjuntar (📎).\n` +
+          `2. Selecciona *Ubicación*.\n` +
+          `3. Elige *Compartir mi ubicación en tiempo real...* (selecciona la duración deseada, ej. 8 horas).\n\n` +
+          `⚠️ *Atención:* NO envíes la ubicación actual estática (un solo pin), ya que el sistema requiere rastreo continuo en tiempo real.`,
+        {
+          parse_mode: 'Markdown',
+          ...(user.rol === 'empleada'
+            ? this.employeeMenu()
+            : this.driverMenu()),
+        },
       );
-    }
-
-    if (user.rol === 'chofer') {
-      const driversGroupId = process.env.TELEGRAM_DRIVERS_GROUP_ID;
-      if (driversGroupId) {
-        try {
-          const invite = await ctx.telegram.createChatInviteLink(
-            driversGroupId,
-            {
-              member_limit: 1,
-              expire_date: Math.floor(Date.now() / 1000) + 3600, // Expire in 1 hour
-            },
-          );
-          await ctx.reply(
-            `🚗 *Grupo de Choferes:*\n\n` +
-              `Por favor únete al grupo oficial de choferes usando el siguiente enlace de un solo uso:\n` +
-              `👉 ${invite.invite_link}`,
-            { parse_mode: 'Markdown' },
-          );
-        } catch (err) {
-          console.error('Error al generar invite link para el chofer:', err);
-        }
-      }
     }
   }
 
@@ -361,7 +355,12 @@ export class TelegramAuthUpdate {
     return Markup.keyboard([
       ['📋 Servicios de hoy', '🟢 Servicio activo'],
       ['🚗 Estatus del chofer'],
-      [Markup.button.locationRequest('📍 Compartir mi Ubicación')],
+    ]).resize();
+  }
+
+  private driverMenu() {
+    return Markup.keyboard([
+      ['🟢 Quedar Disponible', '🔴 Quedar Inactivo'],
     ]).resize();
   }
 
