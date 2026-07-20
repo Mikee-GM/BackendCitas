@@ -16,6 +16,7 @@ import { TelegramAuthUpdate } from './telegram-auth.update';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+import { EmployeeRating } from '../employees/entities/employee-rating.entity';
 
 interface SessionData {
   step?:
@@ -62,6 +63,8 @@ export class TelegramBookingUpdate {
     private readonly extrasCatalogoRepository: Repository<ExtrasCatalogo>,
     @InjectRepository(ExtrasServicio)
     private readonly extrasServicioRepository: Repository<ExtrasServicio>,
+    @InjectRepository(EmployeeRating)
+    private readonly employeeRatingsRepository: Repository<EmployeeRating>,
     private readonly realtimeEventsService: RealtimeEventsService,
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => ServicesService))
@@ -834,6 +837,21 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
     servicio.duracionFinalHoras = duracionRealStr;
     await this.serviciosRepository.save(servicio);
 
+    // El jefe solo puede evaluar después de que el servicio completo quedó finalizado.
+    if (servicio.jefe?.telegramChatId && servicio.empleada) {
+      await ctx.telegram.sendMessage(
+        servicio.jefe.telegramChatId,
+        `⭐ Califica a ${servicio.empleada.nombreArtistico} por este servicio:`,
+        {
+          ...Markup.inlineKeyboard([
+            [1, 2, 3, 4, 5].map((rating) =>
+              Markup.button.callback('⭐'.repeat(rating), `calificar_empleada_jefe:${servicio.id}:${rating}`),
+            ),
+          ]),
+        },
+      );
+    }
+
     let loyaltyAward: {
       pointsEarned: number;
       pointsBalance: number;
@@ -1068,6 +1086,28 @@ Por favor, preséntate, saluda de forma muy cariñosa y coméntale la hora aprox
         encErr,
       );
     }
+  }
+
+  @Action(/^calificar_empleada_jefe:(.+):([1-5])$/)
+  async onCalificarEmpleadaComoJefe(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    const match = (ctx as any).match;
+    if (!telegramId || !match) return;
+    const user = await this.usuariosRepository.findOne({ where: { telegramChatId: telegramId } });
+    if (!user || user.rol !== 'jefe') return;
+    const servicio = await this.serviciosRepository.findOne({ where: { id: match[1] } });
+    if (!servicio || servicio.estado !== 'finalizado' || servicio.jefeId !== user.id) {
+      await ctx.answerCbQuery('❌ Solo puedes calificar servicios propios ya finalizados.', { show_alert: true });
+      return;
+    }
+    const existing = await this.employeeRatingsRepository.findOne({ where: { source: 'jefe', referenceId: servicio.id, raterUserId: user.id } });
+    if (existing) {
+      await ctx.answerCbQuery('Ya calificaste este servicio.', { show_alert: true });
+      return;
+    }
+    await this.employeeRatingsRepository.save(this.employeeRatingsRepository.create({ employeeId: servicio.empleadaId, source: 'jefe', raterUserId: user.id, referenceId: servicio.id, rating: Number(match[2]), comment: null }));
+    await ctx.answerCbQuery('✅ Calificación guardada.');
+    await ctx.editMessageText('✅ Gracias, tu calificación de la empleada fue registrada.');
   }
 
   @Action(/^canc_fin_serv:(.+)$/)

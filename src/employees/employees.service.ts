@@ -13,6 +13,8 @@ import { Usuarios } from '../users/entities/user.entity';
 import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { EmployeeOnboarding } from '../employee-onboarding/entities/employee-onboarding.entity';
+import { EmployeeRating } from './entities/employee-rating.entity';
+import { Servicios } from '../services/entities/service.entity';
 
 @Injectable()
 export class EmployeesService {
@@ -23,6 +25,8 @@ export class EmployeesService {
     private readonly usuariosRepository: Repository<Usuarios>,
     @InjectRepository(EmpleadaFotos)
     private readonly empleadaFotosRepository: Repository<EmpleadaFotos>,
+    @InjectRepository(EmployeeRating)
+    private readonly employeeRatingsRepository: Repository<EmployeeRating>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -152,7 +156,7 @@ export class EmployeesService {
     const employees = await this.empleadasRepository.find({
       relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
-    return this.attachTrustScores(employees);
+    return this.attachScores(employees);
   }
 
   async findAllActive(): Promise<Empleadas[]> {
@@ -160,7 +164,7 @@ export class EmployeesService {
       where: { catalogoActivo: true },
       relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
-    return this.attachTrustScores(employees);
+    return this.attachScores(employees);
   }
 
   async findOne(id: string): Promise<Empleadas> {
@@ -173,14 +177,15 @@ export class EmployeesService {
       throw new NotFoundException(`Empleada con ID ${id} no encontrado`);
     }
 
-    const [employeeWithTrustScore] = await this.attachTrustScores([empleada]);
+    const [employeeWithTrustScore] = await this.attachScores([empleada]);
     return employeeWithTrustScore;
   }
 
-  private async attachTrustScores(employees: Empleadas[]): Promise<Empleadas[]> {
+  private async attachScores(employees: Empleadas[]): Promise<Empleadas[]> {
     if (employees.length === 0) return employees;
 
-    const onboardings = await this.dataSource
+    const [onboardings, clientRatings, staffRatings] = await Promise.all([
+      this.dataSource
       .getRepository(EmployeeOnboarding)
       .find({
         where: {
@@ -192,18 +197,46 @@ export class EmployeesService {
           attemptCount: true,
           trustScore: true,
         },
-      });
+      }),
+      this.dataSource.getRepository(Servicios)
+        .createQueryBuilder('service')
+        .select('service.empleada_id', 'employeeId')
+        .addSelect('AVG(service.calificacion)', 'average')
+        .addSelect('COUNT(service.calificacion)', 'count')
+        .where('service.empleada_id IN (:...ids)', { ids: employees.map((employee) => employee.id) })
+        .andWhere('service.calificacion IS NOT NULL')
+        .groupBy('service.empleada_id')
+        .getRawMany(),
+      this.employeeRatingsRepository
+        .createQueryBuilder('rating')
+        .select('rating.employee_id', 'employeeId')
+        .addSelect('rating.source', 'source')
+        .addSelect('AVG(rating.rating)', 'average')
+        .addSelect('COUNT(rating.rating)', 'count')
+        .where('rating.employee_id IN (:...ids)', { ids: employees.map((employee) => employee.id) })
+        .groupBy('rating.employee_id, rating.source')
+        .getRawMany(),
+    ]);
     const onboardingByEmployee = new Map(
       onboardings.map((onboarding) => [onboarding.employeeId, onboarding]),
     );
+    const clientByEmployee = new Map(clientRatings.map((row) => [row.employeeId, Number(row.average)]));
+    const staffByEmployee = new Map<string, number[]>();
+    for (const row of staffRatings) {
+      const values = staffByEmployee.get(row.employeeId) || [];
+      values.push(Number(row.average));
+      staffByEmployee.set(row.employeeId, values);
+    }
 
     return employees.map((employee) => {
       const onboarding = onboardingByEmployee.get(employee.id);
+      const exam = onboarding && onboarding.attemptCount > 0 ? onboarding.trustScore : null;
+      const clientRating = clientByEmployee.get(employee.id) ?? null;
+      const staff = staffByEmployee.get(employee.id) || [];
+      const internalSources = [exam, clientRating, ...staff].filter((value): value is number => value !== null);
       return Object.assign(employee, {
-        trustScore:
-          onboarding && onboarding.attemptCount > 0
-            ? onboarding.trustScore
-            : null,
+        trustScore: internalSources.length ? Number((internalSources.reduce((a, b) => a + b, 0) / internalSources.length).toFixed(2)) : null,
+        clientRating: clientRating === null ? null : Number(clientRating.toFixed(2)),
       });
     });
   }

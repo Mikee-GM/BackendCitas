@@ -18,6 +18,7 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+import { EmployeeRating } from '../employees/entities/employee-rating.entity';
 import { EmployeeOnboardingModule } from '../employee-onboarding/employee-onboarding.module';
 import { TelegramOnboardingService } from './telegram-onboarding.service';
 import { TelegramOnboardingUpdate } from './telegram-onboarding.update';
@@ -32,6 +33,7 @@ import { TelegramOnboardingScheduler } from './telegram-onboarding.scheduler';
       Servicios,
       ExtrasCatalogo,
       ExtrasServicio,
+      EmployeeRating,
     ]),
     AuthModule,
     LoyaltyModule,

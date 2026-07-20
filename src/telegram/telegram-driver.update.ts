@@ -10,6 +10,7 @@ import { Choferes } from '../drivers/entities/driver.entity';
 import { ServicesService } from '../services/services.service';
 import { TelegramService } from './telegram.service';
 import { Servicios } from '../services/entities/service.entity';
+import { EmployeeRating } from '../employees/entities/employee-rating.entity';
 
 @Update()
 export class TelegramDriverUpdate {
@@ -314,6 +315,30 @@ export class TelegramDriverUpdate {
         { show_alert: true },
       );
     }
+  }
+
+  @Action(/^calificar_empleada_chofer:(.+):([1-5])$/)
+  async onCalificarEmpleada(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    const match = (ctx as any).match;
+    if (!telegramId || !match) return;
+    const user = await this.usuariosRepository.findOne({ where: { telegramChatId: telegramId } });
+    if (!user || user.rol !== 'chofer') return;
+    const trip = await this.dataSource.getRepository(Viajes).findOne({ where: { id: match[1] }, relations: { servicio: true } });
+    const chofer = await this.dataSource.getRepository(Choferes).findOne({ where: { usuarioId: user.id } });
+    if (!trip || !chofer || trip.choferId !== chofer.id || !trip.servicio) {
+      await ctx.answerCbQuery('❌ No puedes calificar este viaje.', { show_alert: true });
+      return;
+    }
+    const repository = this.dataSource.getRepository(EmployeeRating);
+    const existing = await repository.findOne({ where: { source: 'chofer', referenceId: trip.id, raterUserId: user.id } });
+    if (existing) {
+      await ctx.answerCbQuery('Ya calificaste este viaje.', { show_alert: true });
+      return;
+    }
+    await repository.save(repository.create({ employeeId: trip.servicio.empleadaId, source: 'chofer', raterUserId: user.id, referenceId: trip.id, rating: Number(match[2]), comment: null }));
+    await ctx.answerCbQuery('✅ Calificación guardada.');
+    await ctx.editMessageText('✅ Gracias, tu calificación de la empleada fue registrada.');
   }
 
   @Action(/^x_ac_v:(.+)$/)
@@ -1081,6 +1106,21 @@ export class TelegramDriverUpdate {
     trip.estado = 'finalizado';
     trip.horaFinViaje = new Date();
     await this.dataSource.getRepository(Viajes).save(trip);
+
+    // La evaluación del chofer se solicita justo al cerrar cada traslado.
+    if (trip.servicio?.empleada && trip.choferId) {
+      await ctx.telegram.sendMessage(
+        telegramId,
+        `⭐ Califica a ${trip.servicio.empleada.nombreArtistico} por este viaje:`,
+        {
+          ...Markup.inlineKeyboard([
+            [1, 2, 3, 4, 5].map((rating) =>
+              Markup.button.callback('⭐'.repeat(rating), `calificar_empleada_chofer:${trip.id}:${rating}`),
+            ),
+          ]),
+        },
+      );
+    }
 
     // Marcar chofer como disponible nuevamente
     chofer.disponible = true;

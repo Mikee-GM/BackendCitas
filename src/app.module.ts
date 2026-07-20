@@ -23,6 +23,7 @@ import { ApartmentsModule } from './apartments/apartments.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { UploadModule } from './upload/upload.module';
 import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboarding.module';
+import { PromotionsModule } from './promotions/promotions.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboard
     EmployeePhotosModule,
     ApartmentsModule,
     EmployeeOnboardingModule,
+    PromotionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

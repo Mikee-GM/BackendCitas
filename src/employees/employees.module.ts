@@ -5,9 +5,10 @@ import { EmployeesController } from './employees.controller';
 import { Empleadas } from './entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity';
+import { EmployeeRating } from './entities/employee-rating.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Empleadas, Usuarios, EmpleadaFotos])],
+  imports: [TypeOrmModule.forFeature([Empleadas, Usuarios, EmpleadaFotos, EmployeeRating])],
   controllers: [EmployeesController],
   providers: [EmployeesService],
   exports: [EmployeesService],
