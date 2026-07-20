@@ -1480,9 +1480,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         // Solo notificar si no estaba en caché (primera vez) y no está editada
         if (!isEdited) {
           await ctx.reply(
-            `📍 Ubicación inicial registrada para el chofer: ${user.choferes.nombre}.\n\n` +
-              `⚠️ *IMPORTANTE:* Has enviado una ubicación estática. Recuerda compartir tu *Ubicación en tiempo real* (📎 -> Ubicación -> Compartir en tiempo real por 8h) para mantener el rastreo activo durante tu turno.`,
-            { parse_mode: 'Markdown' },
+            `📍 Ubicación registrada para el chofer: ${user.choferes.nombre}.`,
           );
         }
         return;
@@ -1516,9 +1514,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         // Solo notificar si no estaba en caché (primera vez) y no está editada
         if (!isEdited) {
           await ctx.reply(
-            `📍 Ubicación inicial registrada para la empleada: ${user.empleadas.nombreArtistico}.\n\n` +
-              `⚠️ *IMPORTANTE:* Has enviado una ubicación estática. Recuerda compartir tu *Ubicación en tiempo real* (📎 -> Ubicación -> Compartir en tiempo real por 8h) para mantener el rastreo activo durante tu turno.`,
-            { parse_mode: 'Markdown' },
+            `📍 Ubicación registrada para la empleada: ${user.empleadas.nombreArtistico}.`,
           );
         }
         return;

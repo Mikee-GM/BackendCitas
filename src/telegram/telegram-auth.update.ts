@@ -19,6 +19,7 @@ import { Servicios } from '../services/entities/service.entity';
 import { Viajes } from '../trips/entities/trip.entity';
 import { TelegramService } from './telegram.service';
 import { TelegramBookingUpdate } from './telegram-booking.update';
+import { TelegramOnboardingService } from './telegram-onboarding.service';
 
 @Update()
 export class TelegramAuthUpdate {
@@ -40,6 +41,7 @@ export class TelegramAuthUpdate {
     private readonly telegramService: TelegramService,
     @Inject(forwardRef(() => TelegramBookingUpdate))
     private readonly telegramBookingUpdate: TelegramBookingUpdate,
+    private readonly telegramOnboardingService: TelegramOnboardingService,
   ) {}
 
   @Start()
@@ -192,21 +194,8 @@ export class TelegramAuthUpdate {
         `Tu cuenta con correo ${user.email} (Rol: ${user.rol.toUpperCase()}) ahora está vinculada a este Telegram.`,
     );
 
-    if (user.rol === 'chofer' || user.rol === 'empleada') {
-      await ctx.reply(
-        `📍 *IMPORTANTE: Compartir Ubicación en Tiempo Real*\n\n` +
-          `Para recibir y gestionar servicios correctamente, debes compartir tu *Ubicación en tiempo real* (Live Location):\n\n` +
-          `1. Toca el botón de adjuntar (📎).\n` +
-          `2. Selecciona *Ubicación*.\n` +
-          `3. Elige *Compartir mi ubicación en tiempo real...* (selecciona la duración deseada, ej. 8 horas).\n\n` +
-          `⚠️ *Atención:* NO envíes la ubicación actual estática (un solo pin), ya que el sistema requiere rastreo continuo en tiempo real.`,
-        {
-          parse_mode: 'Markdown',
-          ...(user.rol === 'empleada'
-            ? this.employeeMenu()
-            : this.driverMenu()),
-        },
-      );
+    if (['empleada', 'chofer', 'jefe'].includes(user.rol)) {
+      await this.telegramOnboardingService.handleStaffLinked(user.id);
     }
   }
 

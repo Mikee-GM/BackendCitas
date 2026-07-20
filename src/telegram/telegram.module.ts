@@ -27,6 +27,10 @@ import { ConversacionesTelegram } from '../telegram-conversations/entities/teleg
 import { EmployeeReportsModule } from '../employee-reports/employee-reports.module';
 import { ExtensionsModule } from '../extensions/extensions.module';
 import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
+import { EmployeeOnboardingModule } from '../employee-onboarding/employee-onboarding.module';
+import { TelegramOnboardingService } from './telegram-onboarding.service';
+import { TelegramOnboardingUpdate } from './telegram-onboarding.update';
+import { TelegramOnboardingScheduler } from './telegram-onboarding.scheduler';
 
 @Module({
   imports: [
@@ -44,6 +48,7 @@ import { TransportOperationsModule } from '../transport-operations/transport-ope
     AuthModule,
     LoyaltyModule,
     AiModule,
+    EmployeeOnboardingModule,
     forwardRef(() => ServicesModule),
     EmployeeReportsModule,
     ExtensionsModule,
@@ -92,6 +97,9 @@ import { TransportOperationsModule } from '../transport-operations/transport-ope
     TelegramDriverUpdate,
     TelegramAdminUpdate,
     TelegramBookingService,
+    TelegramOnboardingService,
+    TelegramOnboardingUpdate,
+    TelegramOnboardingScheduler,
   ],
   exports: [TelegramService, TelegrafModule, TelegramBookingService],
 })

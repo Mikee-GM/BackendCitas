@@ -28,6 +28,7 @@ import { UploadModule } from './upload/upload.module';
 import { EmployeeReportsModule } from './employee-reports/employee-reports.module';
 import { LiquidationsModule } from './liquidations/liquidations.module';
 import { TransportOperationsModule } from './transport-operations/transport-operations.module';
+import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboarding.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { TransportOperationsModule } from './transport-operations/transport-oper
     EmployeeReportsModule,
     LiquidationsModule,
     TransportOperationsModule,
+    EmployeeOnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
