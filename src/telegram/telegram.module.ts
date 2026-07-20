@@ -18,6 +18,10 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
+import { EmployeeOnboardingModule } from '../employee-onboarding/employee-onboarding.module';
+import { TelegramOnboardingService } from './telegram-onboarding.service';
+import { TelegramOnboardingUpdate } from './telegram-onboarding.update';
+import { TelegramOnboardingScheduler } from './telegram-onboarding.scheduler';
 
 @Module({
   imports: [
@@ -31,6 +35,7 @@ import { ExtrasServicio } from '../service-extras/entities/service-extra.entity'
     ]),
     AuthModule,
     LoyaltyModule,
+    EmployeeOnboardingModule,
     forwardRef(() => ServicesModule),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule],
@@ -55,6 +60,9 @@ import { ExtrasServicio } from '../service-extras/entities/service-extra.entity'
     TelegramBookingUpdate,
     TelegramDriverUpdate,
     TelegramAdminUpdate,
+    TelegramOnboardingService,
+    TelegramOnboardingUpdate,
+    TelegramOnboardingScheduler,
   ],
   exports: [TelegramService, TelegrafModule],
 })

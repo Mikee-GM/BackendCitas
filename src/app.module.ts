@@ -22,6 +22,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ApartmentsModule } from './apartments/apartments.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { UploadModule } from './upload/upload.module';
+import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboarding.module';
 
 @Module({
   imports: [
@@ -41,7 +42,7 @@ import { UploadModule } from './upload/upload.module';
       database: process.env.DATABASE_NAME || 'chamba_pasteles',
       autoLoadEntities: true,
       entities: [__dirname + '/**/*.entity.js', __dirname + '/**/*.entity.ts'],
-      synchronize: true, // Regla Heavy DB: no sincronización automática en producción/desarrollo estructurado, usar migraciones.
+      synchronize: false,
       migrationsRun: false,
       migrations: [__dirname + '/migrations/*{.ts,.js}'],
     }),
@@ -60,6 +61,7 @@ import { UploadModule } from './upload/upload.module';
     TelegramConversationsModule,
     EmployeePhotosModule,
     ApartmentsModule,
+    EmployeeOnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

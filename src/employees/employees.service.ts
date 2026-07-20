@@ -4,7 +4,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Not } from 'typeorm';
+import { Repository, DataSource, In, Not } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
@@ -12,6 +12,7 @@ import { Empleadas } from './entities/employee.entity';
 import { Usuarios } from '../users/entities/user.entity';
 import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
+import { EmployeeOnboarding } from '../employee-onboarding/entities/employee-onboarding.entity';
 
 @Injectable()
 export class EmployeesService {
@@ -148,16 +149,18 @@ export class EmployeesService {
   }
 
   async findAll(): Promise<Empleadas[]> {
-    return await this.empleadasRepository.find({
+    const employees = await this.empleadasRepository.find({
       relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
+    return this.attachTrustScores(employees);
   }
 
   async findAllActive(): Promise<Empleadas[]> {
-    return await this.empleadasRepository.find({
+    const employees = await this.empleadasRepository.find({
       where: { catalogoActivo: true },
       relations: { usuario: true, empleadaFotos: true, extrasCatalogos: true },
     });
+    return this.attachTrustScores(employees);
   }
 
   async findOne(id: string): Promise<Empleadas> {
@@ -170,7 +173,39 @@ export class EmployeesService {
       throw new NotFoundException(`Empleada con ID ${id} no encontrado`);
     }
 
-    return empleada;
+    const [employeeWithTrustScore] = await this.attachTrustScores([empleada]);
+    return employeeWithTrustScore;
+  }
+
+  private async attachTrustScores(employees: Empleadas[]): Promise<Empleadas[]> {
+    if (employees.length === 0) return employees;
+
+    const onboardings = await this.dataSource
+      .getRepository(EmployeeOnboarding)
+      .find({
+        where: {
+          employeeId: In(employees.map((employee) => employee.id)),
+          active: true,
+        },
+        select: {
+          employeeId: true,
+          attemptCount: true,
+          trustScore: true,
+        },
+      });
+    const onboardingByEmployee = new Map(
+      onboardings.map((onboarding) => [onboarding.employeeId, onboarding]),
+    );
+
+    return employees.map((employee) => {
+      const onboarding = onboardingByEmployee.get(employee.id);
+      return Object.assign(employee, {
+        trustScore:
+          onboarding && onboarding.attemptCount > 0
+            ? onboarding.trustScore
+            : null,
+      });
+    });
   }
 
   async update(

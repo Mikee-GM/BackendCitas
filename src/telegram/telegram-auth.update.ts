@@ -1,5 +1,5 @@
 import { Inject, forwardRef, Logger } from '@nestjs/common';
-import { Update, Start, Help, Ctx, Action, Command } from 'nestjs-telegraf';
+import { Update, Start, Help, Ctx, Command } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
@@ -9,6 +9,7 @@ import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
 import { TelegramService } from './telegram.service';
 import { TelegramBookingUpdate } from './telegram-booking.update';
+import { TelegramOnboardingService } from './telegram-onboarding.service';
 
 @Update()
 export class TelegramAuthUpdate {
@@ -26,6 +27,7 @@ export class TelegramAuthUpdate {
     private readonly telegramService: TelegramService,
     @Inject(forwardRef(() => TelegramBookingUpdate))
     private readonly telegramBookingUpdate: TelegramBookingUpdate,
+    private readonly telegramOnboardingService: TelegramOnboardingService,
   ) {}
 
   @Start()
@@ -175,6 +177,10 @@ export class TelegramAuthUpdate {
           .resize()
           .oneTime(),
       );
+    }
+
+    if (['empleada', 'chofer', 'jefe'].includes(user.rol)) {
+      await this.telegramOnboardingService.handleStaffLinked(user.id);
     }
 
     if (user.rol === 'chofer') {
