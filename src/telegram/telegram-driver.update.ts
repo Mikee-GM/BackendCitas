@@ -17,6 +17,7 @@ import {
   buildReportCategoryCallback,
   parseReportCategoryCode,
 } from '../employee-reports/report-callback';
+import { DisciplineService } from '../discipline/discipline.service';
 
 interface DriverCacheEntry {
   userId: string;
@@ -49,6 +50,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     private readonly telegramService: TelegramService,
     private readonly aiMessageService: AiMessageService,
     private readonly employeeReportsService: EmployeeReportsService,
+    private readonly disciplineService: DisciplineService,
   ) {
     this.cacheCleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -64,6 +66,27 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     if (this.cacheCleanupInterval) {
       clearInterval(this.cacheCleanupInterval);
     }
+  }
+
+  @Hears('/reputacion')
+  async onDriverReputation(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+    const identity = await this.getChoferFromCache(telegramId);
+    if (!identity || identity.error) return;
+    const reputation = await this.disciplineService.ownReputation({
+      id: identity.userId,
+      rol: 'chofer',
+    });
+    const lines = reputation.ratings.map(
+      (item: any) =>
+        `${item.direction}: ${Number(item.average).toFixed(2)} (${item.count})`,
+    );
+    await ctx.reply(
+      lines.length
+        ? `Tu reputación por fuente:\n${lines.join('\n')}`
+        : 'Todavía no tienes calificaciones.',
+    );
   }
 
   private async getChoferFromCache(
@@ -147,6 +170,18 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
       );
       return;
     }
+    try {
+      await this.disciplineService.assertOperationallyAllowed(
+        'driver',
+        chofer.id,
+      );
+    } catch {
+      await ctx.answerCbQuery(
+        'Tu cuenta tiene una sanción activa y no puede aceptar viajes.',
+        { show_alert: true },
+      );
+      return;
+    }
 
     const match = (ctx as any).match;
     const viajeId = match[1];
@@ -205,6 +240,18 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
     if (chofer.error === 'no_profile') {
       await ctx.answerCbQuery(
         '❌ No se encontró tu perfil de chofer en el sistema.',
+        { show_alert: true },
+      );
+      return;
+    }
+    try {
+      await this.disciplineService.assertOperationallyAllowed(
+        'driver',
+        chofer.id,
+      );
+    } catch {
+      await ctx.answerCbQuery(
+        'Tu cuenta tiene una sanción activa y no puede aceptar viajes.',
         { show_alert: true },
       );
       return;
@@ -1259,6 +1306,14 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [
+            1, 2, 3, 4, 5,
+          ].map((stars) =>
+            Markup.button.callback(
+              `${stars}`,
+              `rate_emp_trip:${trip.id}:${stars}`,
+            ),
+          ),
+          [
             Markup.button.callback(
               '⚠️ Reportar empleada',
               `er_driver_start:${trip.servicio.id}`,
@@ -1268,6 +1323,23 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
       });
     } catch (err) {
       console.error('Error actualizando mensaje de finalización:', err);
+    }
+    const employeeChatId = trip.servicio.empleada?.usuario?.telegramChatId;
+    if (employeeChatId) {
+      await ctx.telegram
+        .sendMessage(
+          employeeChatId,
+          `Califica el trayecto realizado por ${chofer.nombre}.`,
+          Markup.inlineKeyboard([
+            [1, 2, 3, 4, 5].map((stars) =>
+              Markup.button.callback(
+                `${stars}`,
+                `rate_driver_trip:${trip.id}:${stars}`,
+              ),
+            ),
+          ]),
+        )
+        .catch(() => undefined);
     }
 
     // Notificar al cliente que la empleada ha llegado (únicamente para viajes de ida)
@@ -1289,6 +1361,41 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         );
       }
     }
+  }
+
+  @Action(/^rate_emp_trip:(.+):([1-5])$/)
+  async onRateEmployeeFromDriver(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const tripId = (ctx as any).match[1];
+    const stars = Number((ctx as any).match[2]);
+    const session = ((ctx as any).session ||= {});
+    if (stars <= 2) {
+      session.step = 'AWAITING_DRIVER_RATING_COMMENT';
+      session.ratingTripId = tripId;
+      session.ratingStars = stars;
+      await ctx.reply(
+        'Para una o dos estrellas, escribe un comentario con el motivo.',
+      );
+      return;
+    }
+    const telegramId = ctx.from?.id.toString();
+    const identity = telegramId
+      ? await this.getChoferFromCache(telegramId)
+      : null;
+    if (!identity || identity.error) {
+      await ctx.reply('No fue posible validar tu perfil de chofer.');
+      return;
+    }
+    await this.disciplineService.createRating(
+      { id: identity.userId, rol: 'chofer' },
+      {
+        direction: 'driver_to_employee',
+        interactionId: tripId,
+        stars,
+      },
+    );
+    await ctx.editMessageReplyMarkup(undefined);
+    await ctx.reply('Calificación registrada. Gracias por tu opinión.');
   }
 
   @Action(/^x_ch_fin:(.+)$/)
@@ -1403,6 +1510,70 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
   @On('text')
   async onDriverReportText(@Ctx() ctx: Context) {
     const session = (ctx as any).session;
+    if (session?.step === 'AWAITING_DRIVER_RATING_COMMENT') {
+      const comment = ((ctx.message as { text?: string })?.text || '').trim();
+      if (comment.length < 3 || comment.length > 2000) {
+        await ctx.reply('El comentario debe tener entre 3 y 2000 caracteres.');
+        return;
+      }
+      const telegramId = ctx.from?.id.toString();
+      const identity = telegramId
+        ? await this.getChoferFromCache(telegramId)
+        : null;
+      if (!identity || identity.error) {
+        await ctx.reply('No fue posible validar tu perfil de chofer.');
+        return;
+      }
+      await this.disciplineService.createRating(
+        { id: identity.userId, rol: 'chofer' },
+        {
+          direction: 'driver_to_employee',
+          interactionId: session.ratingTripId,
+          stars: session.ratingStars,
+          comment,
+        },
+      );
+      (ctx as any).session = {};
+      await ctx.reply(
+        'Calificación registrada. Puedes crear un reporte adicional si lo consideras necesario.',
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              'Crear también un reporte',
+              `conduct_driver_trip:${session.ratingTripId}`,
+            ),
+          ],
+        ]),
+      );
+      return;
+    }
+    if (session?.step === 'AWAITING_DRIVER_CONDUCT_DESCRIPTION') {
+      const description = ((ctx.message as { text?: string })?.text || '').trim();
+      if (description.length < 3 || description.length > 2000) {
+        await ctx.reply('La descripción debe tener entre 3 y 2000 caracteres.');
+        return;
+      }
+      const telegramId = ctx.from?.id.toString();
+      const identity = telegramId
+        ? await this.getChoferFromCache(telegramId)
+        : null;
+      if (!identity || identity.error) {
+        await ctx.reply('No fue posible validar tu perfil de chofer.');
+        return;
+      }
+      await this.disciplineService.createReport(
+        { id: identity.userId, rol: 'chofer' },
+        {
+          direction: 'driver_to_employee',
+          interactionId: session.conductTripId,
+          category: 'otro',
+          description,
+        },
+      );
+      (ctx as any).session = {};
+      await ctx.reply('Reporte enviado para revisión administrativa.');
+      return;
+    }
     if (session?.step !== 'AWAITING_DRIVER_REPORT_DESCRIPTION') return;
     const description = ((ctx.message as { text?: string })?.text || '').trim();
     if (description.length < 3 || description.length > 2000) {
@@ -1419,6 +1590,15 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         ],
       ]),
     );
+  }
+
+  @Action(/^conduct_driver_trip:(.+)$/)
+  async onDriverConductAfterRating(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const session = ((ctx as any).session ||= {});
+    session.step = 'AWAITING_DRIVER_CONDUCT_DESCRIPTION';
+    session.conductTripId = (ctx as any).match[1];
+    await ctx.reply('Describe brevemente la conducta que deseas reportar.');
   }
 
   @Action('er_driver_confirm')

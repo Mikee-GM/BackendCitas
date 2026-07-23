@@ -12,6 +12,7 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { LiquidationsModule } from '../liquidations/liquidations.module';
 import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import { DisciplineModule } from '../discipline/discipline.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { ConversacionesTelegram } from '../telegram-conversations/entities/teleg
     LoyaltyModule,
     LiquidationsModule,
     TransportOperationsModule,
+    DisciplineModule,
   ],
   controllers: [ServicesController],
   providers: [ServicesService],

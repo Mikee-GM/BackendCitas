@@ -179,8 +179,25 @@ export class EmployeesService {
         jefeSecundario: true,
       },
     });
+    const sanctionedRows: Array<{ subject_id: string }> =
+      employees.length === 0
+        ? []
+        : await this.dataSource.query(
+            `SELECT DISTINCT subject_id
+             FROM disciplinary_sanctions
+             WHERE subject_type = 'employee'
+               AND status = 'active'
+               AND starts_at <= now()
+               AND (type = 'permanent_ban' OR ends_at > now())
+               AND subject_id = ANY($1::uuid[])`,
+            [employees.map((employee) => employee.id)],
+          );
+    const sanctioned = new Set(sanctionedRows.map((row) => row.subject_id));
+    const publicEmployees = employees.filter(
+      (employee) => !sanctioned.has(employee.id) && employee.usuario?.activo,
+    );
     return this.attachCatalogAvailability(
-      await this.attachTrustScores(employees),
+      await this.attachTrustScores(publicEmployees),
     );
   }
 
@@ -243,6 +260,8 @@ export class EmployeesService {
     );
 
     return employees.map((employee) => {
+      employee.clientRatingAverage = employee.promedioCalificacion;
+      employee.clientRatingCount = employee.totalServiciosValorados;
       const active = activeByEmployee.get(employee.id);
       const estimatedAvailableAt =
         active?.horaInicioServicio && active.duracionPactadaHoras

@@ -29,6 +29,7 @@ import {
   estimateServiceEnd,
   estimateTravelMinutes,
 } from './service-scheduling';
+import { DisciplineService } from '../discipline/discipline.service';
 
 @Injectable()
 export class ServicesService implements OnModuleInit, OnModuleDestroy {
@@ -66,6 +67,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     private readonly loyaltyService: LoyaltyService,
     private readonly liquidationSync: OfficeLiquidationSyncService,
     private readonly configService: ConfigService,
+    private readonly disciplineService: DisciplineService,
   ) {}
 
   private estimatedEnd(service: Servicios): Date | null {
@@ -117,6 +119,16 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
   async reserveNext(createData: Partial<Servicios>): Promise<Servicios> {
     if (!createData.empleadaId) {
       throw new BadRequestException('Falta la empleada');
+    }
+    await this.disciplineService.assertOperationallyAllowed(
+      'employee',
+      createData.empleadaId,
+    );
+    if (createData.clienteId) {
+      await this.disciplineService.assertOperationallyAllowed(
+        'client',
+        createData.clienteId,
+      );
     }
     return this.serviciosRepository.manager.transaction(async (manager) => {
       await manager
@@ -372,6 +384,14 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       );
     }
     this.assertActorCanManageService(servicio, user);
+    await this.disciplineService.assertOperationallyAllowed(
+      'employee',
+      servicio.empleadaId,
+    );
+    await this.disciplineService.assertOperationallyAllowed(
+      'client',
+      servicio.clienteId,
+    );
 
     servicio.jefeId = jefeId;
     servicio.notasJefe = bossNotes?.trim() || null;
@@ -980,6 +1000,16 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       .andWhere('usuario.telegramChatId IS NOT NULL')
       .andWhere('chofer.ubicacionLat IS NOT NULL')
       .andWhere('chofer.ubicacionLng IS NOT NULL');
+    query.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM disciplinary_sanctions ds
+        WHERE ds.subject_type = 'driver'
+          AND ds.subject_id = chofer.id
+          AND ds.status = 'active'
+          AND ds.starts_at <= now()
+          AND (ds.type = 'permanent_ban' OR ds.ends_at > now())
+      )`,
+    );
 
     if (notificadosIds.length > 0) {
       query.andWhere('chofer.id NOT IN (:...notificadosIds)', {

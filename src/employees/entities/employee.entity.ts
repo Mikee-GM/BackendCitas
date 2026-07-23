@@ -31,6 +31,18 @@ export class Empleadas {
   @ApiPropertyOptional()
   canScheduleNext?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Promedio público calculado solo con cliente a empleada',
+    example: 4.75,
+  })
+  clientRatingAverage?: number | null;
+
+  @ApiProperty({
+    description: 'Cantidad de opiniones públicas de clientes',
+    example: 12,
+  })
+  clientRatingCount?: number;
+
   @Column('uuid', {
     primary: true,
     name: 'id',

@@ -4,7 +4,7 @@ import {
   Logger,
   BeforeApplicationShutdown,
 } from '@nestjs/common';
-import { Update, Ctx, Action, On } from 'nestjs-telegraf';
+import { Update, Ctx, Action, On, Hears } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -40,6 +40,7 @@ import {
 import { ExtensionsService } from '../extensions/extensions.service';
 import { TransportOperationsService } from '../transport-operations/transport-operations.service';
 import { randomUUID } from 'crypto';
+import { DisciplineService } from '../discipline/discipline.service';
 
 interface SessionData {
   step?:
@@ -47,6 +48,8 @@ interface SessionData {
     | 'AWAITING_PAYMENT_METHOD'
     | 'AWAITING_LOCATION'
     | 'AWAITING_RATING_COMMENT'
+    | 'AWAITING_EMPLOYEE_DRIVER_RATING_COMMENT'
+    | 'AWAITING_EMPLOYEE_CONDUCT_DESCRIPTION'
     | 'AWAITING_CLIENT_REPORT_DESCRIPTION'
     | 'AWAITING_UBER_SCREENSHOT'
     | 'AWAITING_UBER_FARE_ACTION'
@@ -56,6 +59,11 @@ interface SessionData {
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
   servicioIdCalificacion?: string;
+  pendingRating?: number;
+  disciplineTripId?: string;
+  disciplineServiceId?: string;
+  disciplineStars?: number;
+  disciplineDirection?: 'employee_to_driver' | 'employee_to_client';
   reportServiceId?: string;
   reportCategory?: ReportCategory;
   reportDescription?: string;
@@ -190,6 +198,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly employeeReportsService: EmployeeReportsService,
     private readonly extensionsService: ExtensionsService,
     private readonly transportOperations: TransportOperationsService,
+    private readonly disciplineService: DisciplineService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
     this.locationCleanupInterval = setInterval(() => {
@@ -314,6 +323,30 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         this.logger.error('Error final en sendDelayedReply:', finalErr);
       }
     }
+  }
+
+  @Hears('/reputacion')
+  async onEmployeeReputation(@Ctx() ctx: BotContext) {
+    const user = await this.usuariosRepository.findOne({
+      where: {
+        telegramChatId: ctx.from!.id.toString(),
+        rol: 'empleada',
+      },
+    });
+    if (!user) return;
+    const reputation = await this.disciplineService.ownReputation({
+      id: user.id,
+      rol: 'empleada',
+    });
+    const lines = reputation.ratings.map(
+      (item: any) =>
+        `${item.direction}: ${Number(item.average).toFixed(2)} (${item.count})`,
+    );
+    await ctx.reply(
+      lines.length
+        ? `Tu reputación por fuente:\n${lines.join('\n')}`
+        : 'Todavía no tienes calificaciones.',
+    );
   }
 
   @Action(/^contratar_empleada:(.+)$/)
@@ -1266,6 +1299,23 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     } catch (err) {
       console.error('Error al editar mensaje de cierre de actividad:', err);
     }
+    await ctx.reply(
+      'Califica tu interacción con el cliente.',
+      Markup.inlineKeyboard([
+        [1, 2, 3, 4, 5].map((stars) =>
+          Markup.button.callback(
+            `${stars}`,
+            `rate_client_service:${servicio.id}:${stars}`,
+          ),
+        ),
+        [
+          Markup.button.callback(
+            'Reportar al cliente',
+            `conduct_employee_client:${servicio.id}`,
+          ),
+        ],
+      ]),
+    );
 
     // 2. Limpieza de chat del cliente (Eliminar mensaje anterior)
     if (servicio.cliente?.telegramChatId && servicio.telegramClienteMensajeId) {
@@ -1286,6 +1336,80 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         console.error('Error al solicitar transporte de regreso:', err);
       }
     }
+  }
+
+  @Action(/^rate_driver_trip:(.+):([1-5])$/)
+  async onEmployeeRatesDriver(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    await this.handleEmployeeRating(
+      ctx,
+      'employee_to_driver',
+      (ctx as any).match[1],
+      Number((ctx as any).match[2]),
+    );
+  }
+
+  @Action(/^rate_client_service:(.+):([1-5])$/)
+  async onEmployeeRatesClient(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    await this.handleEmployeeRating(
+      ctx,
+      'employee_to_client',
+      (ctx as any).match[1],
+      Number((ctx as any).match[2]),
+    );
+  }
+
+  private async handleEmployeeRating(
+    ctx: BotContext,
+    direction: 'employee_to_driver' | 'employee_to_client',
+    interactionId: string,
+    stars: number,
+  ) {
+    if (stars <= 2) {
+      ctx.session ||= {};
+      ctx.session.step = 'AWAITING_EMPLOYEE_DRIVER_RATING_COMMENT';
+      ctx.session.disciplineDirection = direction;
+      ctx.session.disciplineStars = stars;
+      if (direction === 'employee_to_driver') {
+        ctx.session.disciplineTripId = interactionId;
+      } else {
+        ctx.session.disciplineServiceId = interactionId;
+      }
+      await ctx.reply(
+        'Para una o dos estrellas, escribe un comentario con el motivo.',
+      );
+      return;
+    }
+    const user = await this.usuariosRepository.findOne({
+      where: { telegramChatId: ctx.from!.id.toString(), rol: 'empleada' },
+    });
+    if (!user) {
+      await ctx.reply('No fue posible validar tu perfil de empleada.');
+      return;
+    }
+    await this.disciplineService.createRating(
+      { id: user.id, rol: 'empleada' },
+      { direction, interactionId, stars },
+    );
+    await ctx.editMessageReplyMarkup(undefined);
+    await ctx.reply('Calificación registrada. Gracias por tu opinión.');
+  }
+
+  @Action(/^conduct_employee_(client|driver):(.+)$/)
+  async onEmployeeConductStart(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    ctx.session ||= {};
+    const target = (ctx as any).match[1] as 'client' | 'driver';
+    ctx.session.step = 'AWAITING_EMPLOYEE_CONDUCT_DESCRIPTION';
+    ctx.session.disciplineDirection =
+      target === 'client' ? 'employee_to_client' : 'employee_to_driver';
+    if (target === 'client') {
+      ctx.session.disciplineServiceId = (ctx as any).match[2];
+    } else {
+      ctx.session.disciplineTripId = (ctx as any).match[2];
+    }
+    await ctx.reply('Describe brevemente la conducta que deseas reportar.');
   }
 
   @Action(/^canc_fin_serv:(.+)$/)
@@ -1345,12 +1469,23 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    servicio.calificacion = rating;
-    await this.serviciosRepository.save(servicio);
-
     const stars = '⭐'.repeat(rating);
 
     if (rating >= 3) {
+      const client = await this.clientesRepository.findOne({
+        where: { telegramChatId: ctx.from!.id.toString() },
+      });
+      if (!client) {
+        await ctx.reply('No fue posible identificar al cliente.');
+        return;
+      }
+      await this.disciplineService.createClientRating(client.id, {
+        direction: 'client_to_employee',
+        interactionId: servicioId,
+        stars: rating,
+      });
+      servicio.calificacion = rating;
+      await this.serviciosRepository.save(servicio);
       await ctx.editMessageText(
         `Muchas gracias por calificar con ${stars} el servicio de nuestra empleada. ¡Agradecemos tu preferencia!`,
         Markup.inlineKeyboard([
@@ -1369,6 +1504,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       }
       ctx.session.step = 'AWAITING_RATING_COMMENT';
       ctx.session.servicioIdCalificacion = servicioId;
+      ctx.session.pendingRating = rating;
 
       await ctx.editMessageText(
         `Has calificado con ${stars} nuestro servicio.\n\n` +
@@ -2152,6 +2288,74 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('text')
   async onMessage(@Ctx() ctx: BotContext) {
+    if (
+      ctx.session?.step === 'AWAITING_EMPLOYEE_DRIVER_RATING_COMMENT' ||
+      ctx.session?.step === 'AWAITING_EMPLOYEE_CONDUCT_DESCRIPTION'
+    ) {
+      const description = (
+        (ctx.message as { text?: string })?.text || ''
+      ).trim();
+      if (description.length < 3 || description.length > 2000) {
+        await ctx.reply('El texto debe tener entre 3 y 2000 caracteres.');
+        return;
+      }
+      const user = await this.usuariosRepository.findOne({
+        where: {
+          telegramChatId: ctx.from!.id.toString(),
+          rol: 'empleada',
+        },
+      });
+      if (!user || !ctx.session.disciplineDirection) {
+        await ctx.reply('No fue posible validar tu perfil de empleada.');
+        return;
+      }
+      const interactionId =
+        ctx.session.disciplineDirection === 'employee_to_driver'
+          ? ctx.session.disciplineTripId
+          : ctx.session.disciplineServiceId;
+      if (!interactionId) {
+        ctx.session = {};
+        await ctx.reply('La sesión expiró. Inicia el proceso nuevamente.');
+        return;
+      }
+      if (ctx.session.step === 'AWAITING_EMPLOYEE_DRIVER_RATING_COMMENT') {
+        const direction = ctx.session.disciplineDirection;
+        await this.disciplineService.createRating(
+          { id: user.id, rol: 'empleada' },
+          {
+            direction,
+            interactionId,
+            stars: ctx.session.disciplineStars!,
+            comment: description,
+          },
+        );
+        ctx.session = {};
+        await ctx.reply(
+          'Calificación registrada. Puedes crear un reporte adicional si lo consideras necesario.',
+          Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                'Crear también un reporte',
+                `conduct_employee_${direction === 'employee_to_client' ? 'client' : 'driver'}:${interactionId}`,
+              ),
+            ],
+          ]),
+        );
+      } else {
+        await this.disciplineService.createReport(
+          { id: user.id, rol: 'empleada' },
+          {
+            direction: ctx.session.disciplineDirection,
+            interactionId,
+            category: 'otro',
+            description,
+          },
+        );
+        ctx.session = {};
+        await ctx.reply('Reporte enviado para revisión administrativa.');
+      }
+      return;
+    }
     if ((ctx.session?.step as string) === 'AWAITING_DRIVER_REPORT_DESCRIPTION')
       return;
     if (ctx.session?.step === 'AWAITING_CLIENT_REPORT_DESCRIPTION') {
@@ -2744,12 +2948,22 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           },
         });
         if (servicio) {
-          servicio.comentariosCalificacion = comments;
-
-          // Si el análisis de IA sugiere una calificación y no se definió antes, o si queremos reajustarla:
-          if (!servicio.calificacion) {
-            servicio.calificacion = analysisResult.score;
+          const client = await this.clientesRepository.findOne({
+            where: { telegramChatId: ctx.from!.id.toString() },
+          });
+          if (!client) {
+            await ctx.reply('No fue posible identificar al cliente.');
+            return;
           }
+          const rating = ctx.session?.pendingRating ?? analysisResult.score;
+          await this.disciplineService.createClientRating(client.id, {
+            direction: 'client_to_employee',
+            interactionId: servicio.id,
+            stars: rating,
+            comment: comments,
+          });
+          servicio.comentariosCalificacion = comments;
+          servicio.calificacion = rating;
 
           await this.serviciosRepository.save(servicio);
 

@@ -29,6 +29,7 @@ import { EmployeeReportsModule } from './employee-reports/employee-reports.modul
 import { LiquidationsModule } from './liquidations/liquidations.module';
 import { TransportOperationsModule } from './transport-operations/transport-operations.module';
 import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboarding.module';
+import { DisciplineModule } from './discipline/discipline.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboard
     LiquidationsModule,
     TransportOperationsModule,
     EmployeeOnboardingModule,
+    DisciplineModule,
   ],
   controllers: [AppController],
   providers: [AppService],
