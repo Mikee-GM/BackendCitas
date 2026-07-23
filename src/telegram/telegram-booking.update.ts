@@ -91,12 +91,16 @@ export function parseUberFareInput(text: string): number | undefined {
 }
 
 export function extractHireDuration(text: string): number | undefined {
-  const match = text.match(
-    /(?:^|\s)(\d+(?:[.,]\d+)?)\s*(?:h|hora|horas)?(?:\s|$)/i,
-  );
+  if (/\d+[.,]\d+/.test(text)) {
+    return undefined;
+  }
+
+  const match = text.match(/(?:^|\s)(\d+)\s*(?:h|hora|horas)?(?:\s|$)/i);
   if (match) {
-    const duration = Number(match[1].replace(',', '.'));
-    return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+    const duration = parseInt(match[1], 10);
+    return Number.isInteger(duration) && duration >= 1 && duration <= 24
+      ? duration
+      : undefined;
   }
 
   const normalized = text.toLowerCase().trim();
@@ -282,17 +286,29 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   async sendDelayedReply(ctx: BotContext, text: string) {
     try {
-      const delayMs = 1000; // 30 segundos (medio minuto)
+      const delayMs = 1000;
 
       // Enviar la acción de "escribiendo" de inmediato
       await ctx.sendChatAction('typing').catch(() => {});
 
       await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      try {
+        await ctx.reply(text, { parse_mode: 'Markdown' });
+      } catch (mdErr) {
+        this.logger.warn(
+          'Error al enviar mensaje con Markdown, reenviando en texto plano:',
+          mdErr,
+        );
+        await ctx.reply(text);
+      }
     } catch (err) {
       this.logger.error('Error in sendDelayedReply:', err);
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      try {
+        await ctx.reply(text);
+      } catch (finalErr) {
+        this.logger.error('Error final en sendDelayedReply:', finalErr);
+      }
     }
   }
 
@@ -1653,9 +1669,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               jefeUser.grupoTelegramId,
               `👤 Cliente: ${clientName}`,
             );
-            // Acumulamos en memoria
+            // Acumulamos en memoria y guardamos en DB
             nuevoServicioEnc.telegramThreadId =
               topic.message_thread_id.toString();
+            await this.serviciosRepository.save(nuevoServicioEnc);
 
             const detailsMsg =
               `📋 *Información del Servicio (Cita Encadenada):*\n\n` +
@@ -1790,8 +1807,9 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
             jefeUser.grupoTelegramId,
             `👤 Cliente: ${clientName}`,
           );
-          // Acumulamos en memoria
+          // Acumulamos en memoria y guardamos en DB
           nuevoServicio.telegramThreadId = topic.message_thread_id.toString();
+          await this.serviciosRepository.save(nuevoServicio);
 
           const detailsMsg =
             `📋 *Información del Servicio:*\n\n` +
@@ -2160,13 +2178,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           relations: {
             jefe: true,
             cliente: true,
-            empleada: true,
+            empleada: { jefe: true },
           },
           order: { createdAt: 'DESC' },
         });
 
         if (activeService && activeService.iaActiva === false) {
-          const jefe = activeService.jefe;
+          const jefe = activeService.jefe || activeService.empleada?.jefe;
           const grupoTelegramId = jefe?.grupoTelegramId;
           this.logger.log(
             `Procesando mensaje de cliente. activeService.id=${activeService.id}, jefeId=${jefe?.id}, grupoTelegramId=${grupoTelegramId}`,
@@ -2369,11 +2387,16 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
       try {
         await ctx.sendChatAction('typing');
-        let responseText = await this.getGroqResponse(
+        const responseText = await this.getGroqResponse(
           systemPrompt,
           history,
           telegramId,
         );
+
+        // Strip DATA block unconditionally before sending to user
+        const cleanText = responseText
+          .replace(/\[DATA:\s*\{.*?\}\]/g, '')
+          .trim();
 
         // Check if response contains the structured DATA block
         const dataMatch = responseText.match(/\[DATA:\s*(\{.*?\})\]/);
@@ -2381,25 +2404,26 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         if (dataMatch) {
           try {
             const parsedData = JSON.parse(dataMatch[1]);
-            if (parsedData.duracion && parsedData.pago) {
-              session.duracionPactadaHoras = parseFloat(parsedData.duracion);
+            const parsedDuracion = parseInt(parsedData.duracion, 10);
+            if (
+              Number.isInteger(parsedDuracion) &&
+              parsedDuracion >= 1 &&
+              parsedDuracion <= 24 &&
+              parsedData.pago
+            ) {
+              session.duracionPactadaHoras = parsedDuracion;
               session.metodoPago = parsedData.pago;
 
               // Transition step to AWAITING_LOCATION
               session.step = 'AWAITING_LOCATION';
 
-              // Clean the DATA block from the text response
-              responseText = responseText
-                .replace(/\[DATA:\s*\{.*?\}\]/g, '')
-                .trim();
-
               // Push final response to history
-              history.push({ role: 'model', parts: [{ text: responseText }] });
+              history.push({ role: 'model', parts: [{ text: cleanText }] });
               session.chatHistory = history;
 
               await this.replyWithServiceLocationOptions(
                 ctx,
-                responseText || 'Selecciona la ubicación del servicio.',
+                cleanText || 'Selecciona la ubicación del servicio.',
               );
               return;
             }
@@ -2412,10 +2436,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         }
 
         // Push model response to history
-        history.push({ role: 'model', parts: [{ text: responseText }] });
+        history.push({ role: 'model', parts: [{ text: cleanText }] });
         session.chatHistory = history;
 
-        await this.sendDelayedReply(ctx, responseText);
+        await this.sendDelayedReply(ctx, cleanText);
       } catch (err: any) {
         if (err?.message === 'AI_LIMIT_REACHED') {
           await ctx.reply(
@@ -2435,11 +2459,16 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     if (step === 'AWAITING_DURATION') {
       const text = (ctx.message as { text?: string })?.text || '';
-      const duracion = parseFloat(text.replace(',', '.'));
+      const duracion = parseInt(text.trim(), 10);
 
-      if (isNaN(duracion) || duracion <= 0) {
+      if (
+        isNaN(duracion) ||
+        duracion < 1 ||
+        duracion > 24 ||
+        /\d+[.,]\d+/.test(text)
+      ) {
         await ctx.reply(
-          '❌ La duración debe ser un número válido mayor a 0 (ejemplo: 2 o 3.5).\n' +
+          '❌ La duración debe ser un número entero válido de horas (ejemplo: 1, 2, 3 entre 1 y 24).\n' +
             'Por favor, intenta nuevamente:',
         );
         return;

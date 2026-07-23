@@ -9,7 +9,7 @@ describe('Telegram booking session input parsing', () => {
   it.each([
     ['2', 2],
     ['quiero 3 horas', 3],
-    ['serían 2,5 horas por favor', 2.5],
+    ['cuatro horas por favor', 4],
     ['dos horas', 2],
     ['una hora por favor', 1],
   ])('extracts a valid duration from %s', (text, expected) => {
@@ -32,6 +32,8 @@ describe('Telegram booking session input parsing', () => {
   it('does not infer invalid booking data', () => {
     expect(extractHireDuration('todavía no sé')).toBeUndefined();
     expect(extractHireDuration('0 horas')).toBeUndefined();
+    expect(extractHireDuration('2.5 horas')).toBeUndefined();
+    expect(extractHireDuration('25 horas')).toBeUndefined();
     expect(extractHirePaymentMethod('luego te digo')).toBeUndefined();
   });
 

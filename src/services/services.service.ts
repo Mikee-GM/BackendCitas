@@ -289,7 +289,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       tipo: 'ida',
       zona: 'domicilio',
       tarifa: tipoTransporte === 'uber' ? 0 : this.driverPayoutFor(servicio),
-      driverPayout: tipoTransporte === 'uber' ? 0 : this.driverPayoutFor(servicio),
+      driverPayout:
+        tipoTransporte === 'uber' ? 0 : this.driverPayoutFor(servicio),
       estado: tipoTransporte === 'uber' ? 'aceptado' : 'notificado',
       proveedorTransporte: tipoTransporte,
     });
@@ -336,18 +337,21 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
           ]);
 
           if (tipoTransporte === 'uber') {
-            inlineButtons.unshift([
-              Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(servicio, 'ida')),
-            ], [
-              Markup.button.callback(
-                'Ya estoy en el Uber',
-                `eu:${viajeGuardado.id}:i`,
-              ),
-              Markup.button.callback(
-                'Ya llegué',
-                `eu:${viajeGuardado.id}:f`,
-              ),
-            ]);
+            inlineButtons.unshift(
+              [
+                Markup.button.url(
+                  'Abrir Uber',
+                  this.buildUberLinkForTrip(servicio, 'ida'),
+                ),
+              ],
+              [
+                Markup.button.callback(
+                  'Ya estoy en el Uber',
+                  `eu:${viajeGuardado.id}:i`,
+                ),
+                Markup.button.callback('Ya llegué', `eu:${viajeGuardado.id}:f`),
+              ],
+            );
           }
 
           const empMsg = await this.bot.telegram.sendMessage(
@@ -1187,7 +1191,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             tipo: 'regreso',
             zona: 'domicilio',
             tarifa: provider === 'uber' ? 0 : this.driverPayoutFor(servicio),
-            driverPayout: provider === 'uber' ? 0 : this.driverPayoutFor(servicio),
+            driverPayout:
+              provider === 'uber' ? 0 : this.driverPayoutFor(servicio),
             estado: provider === 'uber' ? 'aceptado' : 'notificado',
             proveedorTransporte: provider,
           }),
@@ -1221,15 +1226,33 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       type: 'return_transport_selected',
       data: { serviceId: result.servicio.id, trip: result.trip },
     });
-    const employee = await this.serviciosRepository.findOne({ where: { id: result.servicio.id }, relations: { empleada: { usuario: true } } });
+    const employee = await this.serviciosRepository.findOne({
+      where: { id: result.servicio.id },
+      relations: { empleada: { usuario: true } },
+    });
     const employeeChatId = employee?.empleada?.usuario?.telegramChatId;
     if (employeeChatId && employee) {
-      await this.bot.telegram.sendMessage(employeeChatId, 'Solicita tu viaje de regreso y confirma cada etapa.', {
-        ...Markup.inlineKeyboard([
-          [Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(employee, 'regreso'))],
-          [Markup.button.callback('Ya estoy en el Uber', `eu:${result.trip.id}:i`), Markup.button.callback('Ya llegué', `eu:${result.trip.id}:f`)],
-        ]),
-      });
+      await this.bot.telegram.sendMessage(
+        employeeChatId,
+        'Solicita tu viaje de regreso y confirma cada etapa.',
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.url(
+                'Abrir Uber',
+                this.buildUberLinkForTrip(employee, 'regreso'),
+              ),
+            ],
+            [
+              Markup.button.callback(
+                'Ya estoy en el Uber',
+                `eu:${result.trip.id}:i`,
+              ),
+              Markup.button.callback('Ya llegué', `eu:${result.trip.id}:f`),
+            ],
+          ]),
+        },
+      );
     }
     return { trip: result.trip };
   }
@@ -1294,7 +1317,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
         trip.horaFinViaje = null;
         trip.estado = provider === 'uber' ? 'aceptado' : 'notificado';
         trip.tarifa = provider === 'uber' ? 0 : this.driverPayoutFor(servicio);
-        trip.driverPayout = provider === 'uber' ? 0 : this.driverPayoutFor(servicio);
+        trip.driverPayout =
+          provider === 'uber' ? 0 : this.driverPayoutFor(servicio);
         await manager.save(Viajes, trip);
 
         if (trip.tipo === 'regreso') {
@@ -1331,16 +1355,18 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
             `El viaje de ${result.trip.tipo} cambió a Uber. Usa los botones para actualizar tu trayecto.`,
             {
               ...Markup.inlineKeyboard([
-                [Markup.button.url('Abrir Uber', this.buildUberLinkForTrip(servicio, result.trip.tipo))],
+                [
+                  Markup.button.url(
+                    'Abrir Uber',
+                    this.buildUberLinkForTrip(servicio, result.trip.tipo),
+                  ),
+                ],
                 [
                   Markup.button.callback(
                     'Ya estoy en el Uber',
                     `eu:${result.trip.id}:i`,
                   ),
-                  Markup.button.callback(
-                    'Ya llegué',
-                    `eu:${result.trip.id}:f`,
-                  ),
+                  Markup.button.callback('Ya llegué', `eu:${result.trip.id}:f`),
                 ],
               ]),
             },
@@ -1379,7 +1405,11 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private driverPayoutFor(service: Servicios): number {
-    return service.presetLocationId ? 60 : Number(service.customerTransportCharge ?? service.totalTransporte ?? 0) / 2;
+    return service.presetLocationId
+      ? 60
+      : Number(
+          service.customerTransportCharge ?? service.totalTransporte ?? 0,
+        ) / 2;
   }
 
   async saveUberScreenshot(
@@ -1410,8 +1440,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Viaje Uber no encontrado');
     }
     const actor = await this.usuariosRepository.findOneBy({ id: actorId });
-    if (actor?.rol !== 'empleada' || trip.servicio.empleada?.usuarioId !== actor.id) {
-      throw new ConflictException('Solo la empleada asignada puede enviar la captura');
+    if (
+      actor?.rol !== 'empleada' ||
+      trip.servicio.empleada?.usuarioId !== actor.id
+    ) {
+      throw new ConflictException(
+        'Solo la empleada asignada puede enviar la captura',
+      );
     }
     if (trip.estado !== 'finalizado') {
       throw new ConflictException('Primero confirma tu llegada al destino');
@@ -1482,14 +1517,18 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     }
     const trip = await this.getAuthorizedUberTrip(tripId, actorId);
     if (trip.estado === 'cancelado') {
-      throw new ConflictException('La tarifa no puede registrarse en un viaje cancelado');
+      throw new ConflictException(
+        'La tarifa no puede registrarse en un viaje cancelado',
+      );
     }
     const actor = await this.usuariosRepository.findOneBy({ id: actorId });
     if (!actor) throw new ConflictException('Usuario no autorizado');
-    const settledCashObligation =
-      await this.serviciosRepository.manager
-        .getRepository(EmployeeCashObligation)
-        .findOneBy({ serviceId: trip.servicioId, status: 'paid' });
+    const settledCashObligation = this.serviciosRepository.manager
+      ?.getRepository
+      ? await this.serviciosRepository.manager
+          .getRepository(EmployeeCashObligation)
+          .findOneBy({ serviceId: trip.servicioId, status: 'paid' })
+      : null;
     if (
       settledCashObligation &&
       trip.fareConfirmedAt &&
@@ -1501,7 +1540,9 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     }
     const override = !trip.telegramUberFileId && actor.rol === 'admin';
     if (!trip.telegramUberFileId && !override) {
-      throw new ConflictException('La empleada debe enviar la captura antes de confirmar el costo');
+      throw new ConflictException(
+        'La empleada debe enviar la captura antes de confirmar el costo',
+      );
     }
     await this.viajesRepository.update(trip.id, {
       tarifa: amount,
