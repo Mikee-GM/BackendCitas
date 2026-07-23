@@ -57,4 +57,25 @@ No inventes datos, no resumas la reservación, no uses Markdown, listas, etiquet
       return fallback;
     }
   }
+
+  async generateAgencyMessage(
+    event: 'scheduled_eta_updated' | 'employee_available' | 'employee_en_route',
+    context: Record<string, string | number | null | undefined>,
+    fallback: string,
+  ): Promise<string> {
+    try {
+      const response = await this.aiProviderService.generateChatResponse(
+        `Redacta un mensaje breve en español como asistente de la agencia.
+Identifícate claramente como asistente y nunca finjas ser la empleada.
+Evento: ${event}. No inventes información, no uses Markdown y devuelve solo el mensaje.`,
+        [{ role: 'user', content: JSON.stringify(context) }],
+      );
+      return response.trim() || fallback;
+    } catch {
+      this.logger.warn(
+        `No se pudo redactar el mensaje de agencia '${event}'; se usará el fallback.`,
+      );
+      return fallback;
+    }
+  }
 }

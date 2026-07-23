@@ -12,6 +12,10 @@ describe('ServicesService transport settlement', () => {
     findOne: jest.fn(),
   };
   const usuariosRepository = { findOneBy: jest.fn() };
+  const conversationsRepository = {
+    create: jest.fn((value) => value),
+    save: jest.fn(),
+  };
   const realtime = {
     emitToJefes: jest.fn(),
     emitToBoss: jest.fn(),
@@ -33,12 +37,14 @@ describe('ServicesService transport settlement', () => {
     viajesRepository as any,
     {} as any,
     usuariosRepository as any,
+    conversationsRepository as any,
     realtime as any,
     bot as any,
     {} as any,
     {} as any,
     loyalty as any,
     liquidationSync as any,
+    { get: jest.fn() } as any,
   );
 
   beforeEach(() => jest.clearAllMocks());
@@ -64,13 +70,18 @@ describe('ServicesService transport settlement', () => {
       totalTransporte: 235.5,
       totalFinal: 1235.5,
     });
-    jest.spyOn(service, 'sendFinalReceiptAndAward').mockResolvedValue();
+    const receiptSpy = jest
+      .spyOn(service, 'sendFinalReceiptAndAward')
+      .mockResolvedValue();
 
     await service.confirmUberFare('trip', 'boss', 185.5);
 
-    expect(viajesRepository.update).toHaveBeenCalledWith('trip', expect.objectContaining({ tarifa: 185.5 }));
+    expect(viajesRepository.update).toHaveBeenCalledWith(
+      'trip',
+      expect.objectContaining({ tarifa: 185.5 }),
+    );
     expect(serviciosRepository.update).not.toHaveBeenCalled();
-    expect(service.sendFinalReceiptAndAward).toHaveBeenCalledWith('service');
+    expect(receiptSpy).toHaveBeenCalledWith('service');
   });
 
   it('impide que otra empleada actualice el estado del Uber', async () => {

@@ -14,6 +14,7 @@ import { EmpleadaFotos } from '../employee-photos/entities/employee-photo.entity
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { UploadService } from '../upload/upload.service';
 import { EmployeeOnboarding } from '../employee-onboarding/entities/employee-onboarding.entity';
+import { Servicios } from '../services/entities/service.entity';
 
 @Injectable()
 export class EmployeesService {
@@ -162,7 +163,9 @@ export class EmployeesService {
         jefeSecundario: true,
       },
     });
-    return this.attachTrustScores(employees);
+    return this.attachCatalogAvailability(
+      await this.attachTrustScores(employees),
+    );
   }
 
   async findAllActive(): Promise<Empleadas[]> {
@@ -176,7 +179,9 @@ export class EmployeesService {
         jefeSecundario: true,
       },
     });
-    return this.attachTrustScores(employees);
+    return this.attachCatalogAvailability(
+      await this.attachTrustScores(employees),
+    );
   }
 
   async findOne(id: string): Promise<Empleadas> {
@@ -195,8 +200,67 @@ export class EmployeesService {
       throw new NotFoundException(`Empleada con ID ${id} no encontrado`);
     }
 
-    const [employeeWithTrustScore] = await this.attachTrustScores([empleada]);
-    return employeeWithTrustScore;
+    const [employeeWithAvailability] = await this.attachCatalogAvailability(
+      await this.attachTrustScores([empleada]),
+    );
+    return employeeWithAvailability;
+  }
+
+  private async attachCatalogAvailability(
+    employees: Empleadas[],
+  ): Promise<Empleadas[]> {
+    if (!employees.length) return employees;
+    const ids = employees.map((employee) => employee.id);
+    const services = await this.dataSource.getRepository(Servicios).find({
+      where: [
+        { empleadaId: In(ids), estado: 'en_curso' },
+        { empleadaId: In(ids), estado: 'agendado' },
+        { empleadaId: In(ids), estado: 'pendiente' },
+      ],
+      select: {
+        id: true,
+        empleadaId: true,
+        estado: true,
+        horaInicioServicio: true,
+        duracionPactadaHoras: true,
+        servicioPrevioId: true,
+      },
+      order: { createdAt: 'ASC' },
+    });
+    const activeByEmployee = new Map(
+      services
+        .filter((service) => service.estado === 'en_curso')
+        .map((service) => [service.empleadaId, service]),
+    );
+    const queuedEmployees = new Set(
+      services
+        .filter(
+          (service) =>
+            service.servicioPrevioId &&
+            (service.estado === 'pendiente' || service.estado === 'agendado'),
+        )
+        .map((service) => service.empleadaId),
+    );
+
+    return employees.map((employee) => {
+      const active = activeByEmployee.get(employee.id);
+      const estimatedAvailableAt =
+        active?.horaInicioServicio && active.duracionPactadaHoras
+          ? new Date(
+              active.horaInicioServicio.getTime() +
+                Number(active.duracionPactadaHoras) * 3_600_000,
+            )
+          : null;
+      employee.availabilityStatus = !employee.catalogoActivo
+        ? 'inactiva'
+        : active || !employee.disponible
+          ? 'ocupada'
+          : 'disponible';
+      employee.estimatedAvailableAt = estimatedAvailableAt;
+      employee.canScheduleNext =
+        Boolean(active) && !queuedEmployees.has(employee.id);
+      return employee;
+    });
   }
 
   private async attachTrustScores(

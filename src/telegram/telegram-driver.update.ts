@@ -1140,6 +1140,7 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     // Preparar promesas de escritura paralela
     const promises: Promise<any>[] = [];
+    const wasScheduled = trip.servicio?.estado === 'agendado';
 
     // Promesa 1: Viaje update dirigido
     promises.push(
@@ -1163,6 +1164,12 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
         const horaInicio = new Date();
         trip.servicio.horaInicioServicio = horaInicio;
         serviceUpdateData.horaInicioServicio = horaInicio;
+        if (trip.servicio.estado === 'agendado') {
+          trip.servicio.estado = 'en_curso';
+          serviceUpdateData.estado = 'en_curso';
+          serviceUpdateData.servicioPrevioId = null;
+          serviceUpdateData.horaInicioEstimada = horaInicio;
+        }
       } else {
         const horaLlegada = new Date();
         trip.servicio.horaLlegadaCasa = horaLlegada;
@@ -1205,6 +1212,11 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     // Ejecutar todas las promesas en paralelo
     await Promise.all(promises);
+    if (trip.tipo === 'ida' && wasScheduled) {
+      await this.servicesService.notifyScheduledServiceStarted(
+        trip.servicio.id,
+      );
+    }
 
     if (trip.tipo === 'regreso') {
       if (trip.servicio.cliente?.telegramChatId) {
@@ -1483,14 +1495,20 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     const chofer = await this.getChoferFromCache(telegramId);
     if (chofer.error) {
-      await ctx.reply('❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.');
+      await ctx.reply(
+        '❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.',
+      );
       return;
     }
 
-    await this.dataSource.getRepository(Choferes).update(chofer.id, { disponible: true });
+    await this.dataSource
+      .getRepository(Choferes)
+      .update(chofer.id, { disponible: true });
     this.driverIdentityCache.delete(telegramId); // invalidate cache
 
-    await ctx.reply('🟢 Ahora estás registrado como DISPONIBLE. Recibirás solicitudes de viaje cuando estés cerca.');
+    await ctx.reply(
+      '🟢 Ahora estás registrado como DISPONIBLE. Recibirás solicitudes de viaje cuando estés cerca.',
+    );
   }
 
   @Hears('🔴 Quedar Inactivo')
@@ -1500,13 +1518,19 @@ export class TelegramDriverUpdate implements BeforeApplicationShutdown {
 
     const chofer = await this.getChoferFromCache(telegramId);
     if (chofer.error) {
-      await ctx.reply('❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.');
+      await ctx.reply(
+        '❌ No tienes una cuenta de chofer vinculada o tu perfil no está configurado.',
+      );
       return;
     }
 
-    await this.dataSource.getRepository(Choferes).update(chofer.id, { disponible: false });
+    await this.dataSource
+      .getRepository(Choferes)
+      .update(chofer.id, { disponible: false });
     this.driverIdentityCache.delete(telegramId); // invalidate cache
 
-    await ctx.reply('🔴 Ahora estás INACTIVO. No se te asignarán solicitudes de viaje hasta que te pongas disponible.');
+    await ctx.reply(
+      '🔴 Ahora estás INACTIVO. No se te asignarán solicitudes de viaje hasta que te pongas disponible.',
+    );
   }
 }

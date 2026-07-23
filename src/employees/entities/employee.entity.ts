@@ -22,6 +22,15 @@ import { ColumnNumericTransformer } from '../../common/transformers/column-numer
 @Index('empleadas_usuario_id_key', ['usuarioId'], { unique: true })
 @Entity('empleadas', { schema: 'public' })
 export class Empleadas {
+  @ApiPropertyOptional({ enum: ['disponible', 'ocupada', 'inactiva'] })
+  availabilityStatus?: 'disponible' | 'ocupada' | 'inactiva';
+
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
+  estimatedAvailableAt?: Date | null;
+
+  @ApiPropertyOptional()
+  canScheduleNext?: boolean;
+
   @Column('uuid', {
     primary: true,
     name: 'id',

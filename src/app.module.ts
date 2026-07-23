@@ -49,6 +49,8 @@ import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboard
         TELEGRAM_BOT_TOKEN: Joi.string().required(),
         PORT: Joi.number().default(4000),
         MAX_DAILY_AI_CALLS: Joi.number().default(15),
+        SCHEDULE_TRAVEL_SPEED_KMH: Joi.number().positive().default(25),
+        SCHEDULE_PREPARATION_MINUTES: Joi.number().min(0).default(10),
       }),
     }),
     TypeOrmModule.forRootAsync({

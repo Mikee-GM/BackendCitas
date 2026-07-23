@@ -103,7 +103,12 @@ export class ServicesController {
     @Req() req: any,
   ) {
     const jefeId = req.user.id;
-    return this.servicesService.aceptar(id, jefeId, dto.transportType);
+    return this.servicesService.aceptar(
+      id,
+      jefeId,
+      dto.transportType,
+      dto.bossNotes,
+    );
   }
 
   @Post(':id/rechazar')

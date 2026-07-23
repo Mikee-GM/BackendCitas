@@ -162,16 +162,36 @@ export class Servicios {
   @Column('uuid', { name: 'preset_location_id', nullable: true })
   presetLocationId: string | null;
 
-  @Column('varchar', { name: 'location_name_snapshot', length: 80, nullable: true })
+  @Column('varchar', {
+    name: 'location_name_snapshot',
+    length: 80,
+    nullable: true,
+  })
   locationNameSnapshot: string | null;
 
-  @Column('varchar', { name: 'location_address_snapshot', length: 240, nullable: true })
+  @Column('varchar', {
+    name: 'location_address_snapshot',
+    length: 240,
+    nullable: true,
+  })
   locationAddressSnapshot: string | null;
 
-  @Column('numeric', { name: 'customer_transport_charge', precision: 10, scale: 2, nullable: true, transformer: new ColumnNumericTransformer() })
+  @Column('numeric', {
+    name: 'customer_transport_charge',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
   customerTransportCharge: number | null;
 
-  @Column('numeric', { name: 'actual_transport_cost', precision: 10, scale: 2, default: 0, transformer: new ColumnNumericTransformer() })
+  @Column('numeric', {
+    name: 'actual_transport_cost',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
   actualTransportCost: number;
 
   @Column('varchar', {
@@ -245,19 +265,44 @@ export class Servicios {
 
   @Column('enum', {
     name: 'estado',
-    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
+    enum: ['pendiente', 'agendado', 'en_curso', 'finalizado', 'cancelado'],
     default: 'pendiente',
   })
   @ApiProperty({
     description: 'Estado',
-    enum: ['pendiente', 'en_curso', 'finalizado', 'cancelado'],
+    enum: ['pendiente', 'agendado', 'en_curso', 'finalizado', 'cancelado'],
     example: 'pendiente',
   })
-  estado: 'pendiente' | 'en_curso' | 'finalizado' | 'cancelado';
+  estado: 'pendiente' | 'agendado' | 'en_curso' | 'finalizado' | 'cancelado';
+
+  @Column('uuid', { name: 'servicio_previo_id', nullable: true })
+  servicioPrevioId: string | null;
+
+  @Column('timestamp with time zone', {
+    name: 'hora_disponibilidad_estimada',
+    nullable: true,
+  })
+  horaDisponibilidadEstimada: Date | null;
+
+  @Column('timestamp with time zone', {
+    name: 'hora_inicio_estimada',
+    nullable: true,
+  })
+  horaInicioEstimada: Date | null;
+
+  @Column('varchar', {
+    name: 'transporte_agendado',
+    length: 10,
+    nullable: true,
+  })
+  transporteAgendado: 'chofer' | 'uber' | null;
 
   @Column('text', { name: 'notas', nullable: true })
   @ApiPropertyOptional({ description: 'Notas', example: 'Ejemplo' })
   notas: string | null;
+
+  @Column('text', { name: 'notas_jefe', nullable: true })
+  notasJefe: string | null;
 
   @Column('varchar', { name: 'telegram_cliente_mensaje_id', nullable: true })
   @ApiPropertyOptional({

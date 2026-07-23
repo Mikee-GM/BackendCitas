@@ -11,10 +11,17 @@ import { AiModule } from '../ai/ai.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { LiquidationsModule } from '../liquidations/liquidations.module';
 import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
+import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Servicios, Viajes, Choferes, Usuarios]),
+    TypeOrmModule.forFeature([
+      Servicios,
+      Viajes,
+      Choferes,
+      Usuarios,
+      ConversacionesTelegram,
+    ]),
     forwardRef(() => TelegramModule),
     AiModule,
     LoyaltyModule,

@@ -1,5 +1,5 @@
 import { Inject, forwardRef } from '@nestjs/common';
-import { Update, Ctx, Action } from 'nestjs-telegraf';
+import { Update, Ctx, Action, Hears } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +9,10 @@ import { ServicesService } from '../services/services.service';
 
 @Update()
 export class TelegramAdminUpdate {
+  private readonly pendingBossNotes = new Map<
+    string,
+    { serviceId: string; notes: string; sameLocation: boolean }
+  >();
   constructor(
     @InjectRepository(Usuarios)
     private readonly usuariosRepository: Repository<Usuarios>,
@@ -69,17 +73,41 @@ export class TelegramAdminUpdate {
     }
 
     const warnHeader = `⚠️ *¿Confirmas que deseas ${accept ? 'ACEPTAR' : 'RECHAZAR'} este servicio?*\n\n`;
+    const previous = servicio.servicioPrevioId
+      ? await this.serviciosRepository.findOneBy({
+          id: servicio.servicioPrevioId,
+        })
+      : null;
+    const samePresetLocation = Boolean(
+      previous?.presetLocationId &&
+      previous.presetLocationId === servicio.presetLocationId,
+    );
 
     const keyboardButtons = accept
       ? [
           [
+            ...(samePresetLocation
+              ? [
+                  Markup.button.callback(
+                    '📍 Sin notas, misma ubicación',
+                    `conf_ja:${serviceId}:1:same`,
+                  ),
+                ]
+              : [
+                  Markup.button.callback(
+                    '🚗 Sin notas, Chofer',
+                    `conf_ja:${serviceId}:1:chofer`,
+                  ),
+                  Markup.button.callback(
+                    '📱 Sin notas, Uber',
+                    `conf_ja:${serviceId}:1:uber`,
+                  ),
+                ]),
+          ],
+          [
             Markup.button.callback(
-              '🚗 Sí, con Chofer',
-              `conf_ja:${serviceId}:1:chofer`,
-            ),
-            Markup.button.callback(
-              '📱 Sí, con Uber',
-              `conf_ja:${serviceId}:1:uber`,
+              '📝 Agregar notas',
+              `add_boss_notes:${serviceId}`,
             ),
           ],
           [Markup.button.callback('❌ Cancelar', `canc_ja:${serviceId}`)],
@@ -98,6 +126,103 @@ export class TelegramAdminUpdate {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(keyboardButtons),
     });
+  }
+
+  @Action(/^add_boss_notes:(.+)$/)
+  async onAddBossNotes(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery();
+    const actor = await this.getActor(ctx);
+    if (!actor || (actor.rol !== 'jefe' && actor.rol !== 'admin')) {
+      await ctx.reply('No tienes permisos para agregar notas.');
+      return;
+    }
+    const serviceId = (ctx as any).match[1];
+    const service = await this.serviciosRepository.findOneBy({ id: serviceId });
+    const previous = service?.servicioPrevioId
+      ? await this.serviciosRepository.findOneBy({
+          id: service.servicioPrevioId,
+        })
+      : null;
+    this.pendingBossNotes.set(`${actor.id}:${serviceId}`, {
+      serviceId,
+      notes: '',
+      sameLocation: Boolean(
+        previous?.presetLocationId &&
+        previous.presetLocationId === service?.presetLocationId,
+      ),
+    });
+    await ctx.reply(
+      `Escribe las notas internas con el formato:\n/nota ${serviceId} detalle para la empleada`,
+    );
+  }
+
+  @Hears(/^\/nota\s+([0-9a-f-]{36})\s+([\s\S]{1,2000})$/i)
+  async onBossNotesText(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) return;
+    const match = (ctx as any).match;
+    const serviceId = match[1];
+    const notes = match[2].trim();
+    const key = `${actor.id}:${serviceId}`;
+    if (!this.pendingBossNotes.has(key)) return;
+    this.pendingBossNotes.set(key, {
+      ...this.pendingBossNotes.get(key)!,
+      notes,
+    });
+    const pending = this.pendingBossNotes.get(key)!;
+    await ctx.reply('Elige el transporte para aceptar el servicio:', {
+      ...Markup.inlineKeyboard([
+        [
+          ...(pending.sameLocation
+            ? [
+                Markup.button.callback(
+                  '📍 Misma ubicación',
+                  `accept_with_notes:${serviceId}:same`,
+                ),
+              ]
+            : [
+                Markup.button.callback(
+                  '🚗 Chofer',
+                  `accept_with_notes:${serviceId}:chofer`,
+                ),
+                Markup.button.callback(
+                  '📱 Uber',
+                  `accept_with_notes:${serviceId}:uber`,
+                ),
+              ]),
+        ],
+      ]),
+    });
+  }
+
+  @Action(/^accept_with_notes:(.+):(chofer|uber|same)$/)
+  async onAcceptWithNotes(@Ctx() ctx: Context) {
+    const actor = await this.getActor(ctx);
+    if (!actor) return;
+    const match = (ctx as any).match;
+    const key = `${actor.id}:${match[1]}`;
+    const pending = this.pendingBossNotes.get(key);
+    if (!pending?.notes) {
+      await ctx.answerCbQuery('Las notas expiraron.', { show_alert: true });
+      return;
+    }
+    try {
+      await this.servicesService.aceptar(
+        pending.serviceId,
+        actor.id,
+        match[2] === 'same' ? 'chofer' : match[2],
+        pending.notes,
+      );
+      this.pendingBossNotes.delete(key);
+      await ctx.answerCbQuery('Servicio aceptado con notas.');
+      await ctx.editMessageText(
+        `🟢 Servicio aceptado.\n📝 Notas internas: ${pending.notes}`,
+      );
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message || 'No se pudo aceptar', {
+        show_alert: true,
+      });
+    }
   }
 
   private async getActor(ctx: Context): Promise<Usuarios | null> {
@@ -333,7 +458,7 @@ export class TelegramAdminUpdate {
     }
   }
 
-  @Action(/^conf_ja:(.+):([01])(?::(chofer|uber))?$/)
+  @Action(/^conf_ja:(.+):([01])(?::(chofer|uber|same))?$/)
   async onConfJefeAutorizar(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
@@ -353,7 +478,7 @@ export class TelegramAdminUpdate {
     const match = (ctx as any).match;
     const serviceId = match[1];
     const accept = match[2] === '1';
-    const transportType = match[3] || 'chofer';
+    const transportType = match[3] === 'same' ? 'chofer' : match[3] || 'chofer';
 
     // Obtener información del servicio para validar si es una empleada independiente autorizándose a sí misma
     const servicio = await this.serviciosRepository.findOne({

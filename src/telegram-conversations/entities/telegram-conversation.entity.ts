@@ -34,13 +34,19 @@ export class ConversacionesTelegram {
   })
   servicioId: string | null;
 
-  @Column('enum', { name: 'emisor', enum: ['ia', 'jefe', 'cliente'] })
+  @Column('uuid', { name: 'booking_session_id', nullable: true })
+  bookingSessionId: string | null;
+
+  @Column('enum', {
+    name: 'emisor',
+    enum: ['ia', 'jefe', 'cliente', 'sistema'],
+  })
   @ApiProperty({
     description: 'Emisor',
-    enum: ['ia', 'jefe', 'cliente'],
+    enum: ['ia', 'jefe', 'cliente', 'sistema'],
     example: 'ia',
   })
-  emisor: 'ia' | 'jefe' | 'cliente';
+  emisor: 'ia' | 'jefe' | 'cliente' | 'sistema';
 
   @Column('text', { name: 'mensaje' })
   @ApiProperty({ description: 'Mensaje', example: 'Ejemplo' })

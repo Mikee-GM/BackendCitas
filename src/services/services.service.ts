@@ -23,6 +23,12 @@ import { AiMessageService } from '../ai/ai-message.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { OfficeLiquidationSyncService } from '../liquidations/office-liquidation-sync.service';
 import { EmployeeCashObligation } from '../transport-operations/entities/employee-cash-obligation.entity';
+import { ConfigService } from '@nestjs/config';
+import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import {
+  estimateServiceEnd,
+  estimateTravelMinutes,
+} from './service-scheduling';
 
 @Injectable()
 export class ServicesService implements OnModuleInit, OnModuleDestroy {
@@ -50,6 +56,8 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     private readonly choferesRepository: Repository<Choferes>,
     @InjectRepository(Usuarios)
     private readonly usuariosRepository: Repository<Usuarios>,
+    @InjectRepository(ConversacionesTelegram)
+    private readonly conversationsRepository: Repository<ConversacionesTelegram>,
     private readonly realtimeEventsService: RealtimeEventsService,
     @InjectBot() private readonly bot: Telegraf<Context>,
     @Inject(forwardRef(() => TelegramService))
@@ -57,7 +65,104 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     private readonly aiMessageService: AiMessageService,
     private readonly loyaltyService: LoyaltyService,
     private readonly liquidationSync: OfficeLiquidationSyncService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private estimatedEnd(service: Servicios): Date | null {
+    return estimateServiceEnd(
+      service.horaInicioServicio,
+      service.duracionPactadaHoras,
+    );
+  }
+
+  private async recordAgencyMessage(
+    service: Servicios,
+    message: string,
+  ): Promise<void> {
+    await this.conversationsRepository.save(
+      this.conversationsRepository.create({
+        clienteId: service.clienteId,
+        servicioId: service.id,
+        bookingSessionId: null,
+        emisor: 'ia',
+        mensaje: message,
+        iaActiva: false,
+      }),
+    );
+  }
+
+  private travelMinutes(from: Servicios, to: Servicios): number {
+    const speed = Math.max(
+      1,
+      this.configService.get<number>('SCHEDULE_TRAVEL_SPEED_KMH') ?? 25,
+    );
+    const preparation = Math.max(
+      0,
+      this.configService.get<number>('SCHEDULE_PREPARATION_MINUTES') ?? 10,
+    );
+    return estimateTravelMinutes(
+      {
+        latitude: Number(from.ubicacionClienteLat),
+        longitude: Number(from.ubicacionClienteLng),
+      },
+      {
+        latitude: Number(to.ubicacionClienteLat),
+        longitude: Number(to.ubicacionClienteLng),
+      },
+      speed,
+      preparation,
+    );
+  }
+
+  async reserveNext(createData: Partial<Servicios>): Promise<Servicios> {
+    if (!createData.empleadaId) {
+      throw new BadRequestException('Falta la empleada');
+    }
+    return this.serviciosRepository.manager.transaction(async (manager) => {
+      await manager
+        .getRepository(Empleadas)
+        .createQueryBuilder('employee')
+        .setLock('pessimistic_write')
+        .where('employee.id = :id', { id: createData.empleadaId })
+        .getOneOrFail();
+      const active = await manager.findOne(Servicios, {
+        where: { empleadaId: createData.empleadaId, estado: 'en_curso' },
+        order: { createdAt: 'DESC' },
+      });
+      if (!active) {
+        return manager.save(Servicios, manager.create(Servicios, createData));
+      }
+      const existing = await manager.findOne(Servicios, {
+        where: [
+          {
+            empleadaId: createData.empleadaId,
+            servicioPrevioId: active.id,
+            estado: 'pendiente',
+          },
+          {
+            empleadaId: createData.empleadaId,
+            servicioPrevioId: active.id,
+            estado: 'agendado',
+          },
+        ],
+      });
+      if (existing) {
+        throw new ConflictException(
+          'La empleada ya tiene reservado su siguiente servicio',
+        );
+      }
+      const availableAt = this.estimatedEnd(active) ?? new Date();
+      const draft = manager.create(Servicios, {
+        ...createData,
+        servicioPrevioId: active.id,
+        horaDisponibilidadEstimada: availableAt,
+      });
+      draft.horaInicioEstimada = new Date(
+        availableAt.getTime() + this.travelMinutes(active, draft) * 60_000,
+      );
+      return manager.save(Servicios, draft);
+    });
+  }
 
   private getServiceTopic(servicio: Servicios) {
     const chatId =
@@ -119,10 +224,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const nuevoServicio = this.serviciosRepository.create(
-      createServiceDto,
-    ) as any as Servicios;
-    const servicioGuardado = await this.serviciosRepository.save(nuevoServicio);
+    const servicioGuardado = await this.reserveNext(createServiceDto);
 
     // Emit event to Jefes in real-time via SSE
     try {
@@ -221,6 +323,9 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
   async update(id: string, updateData: any): Promise<Servicios> {
     await this.serviciosRepository.update(id, updateData);
     const service = await this.findOne(id);
+    if (updateData.duracionPactadaHoras !== undefined) {
+      await this.recalculateScheduledSuccessor(id);
+    }
     if (service.estado === 'finalizado') {
       await this.liquidationSync.syncOfficeRecord(id);
     }
@@ -237,6 +342,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     id: string,
     jefeId: string,
     tipoTransporte: 'chofer' | 'uber' = 'chofer',
+    bossNotes?: string,
   ): Promise<Servicios & { uberLink?: string; viajeId?: string }> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id },
@@ -267,9 +373,28 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     }
     this.assertActorCanManageService(servicio, user);
 
+    servicio.jefeId = jefeId;
+    servicio.notasJefe = bossNotes?.trim() || null;
+    if (servicio.servicioPrevioId) {
+      servicio.estado = 'agendado';
+      servicio.transporteAgendado = tipoTransporte;
+      await this.serviciosRepository.save(servicio);
+      this.realtimeEventsService.emitToBoss(servicio.jefeId, {
+        type: 'service_scheduled',
+        data: servicio,
+      });
+      const employeeChatId = servicio.empleada?.usuario?.telegramChatId;
+      if (employeeChatId && servicio.notasJefe) {
+        await this.bot.telegram.sendMessage(
+          employeeChatId,
+          `📝 Notas del jefe para tu siguiente servicio:\n${servicio.notasJefe}`,
+        );
+      }
+      return servicio;
+    }
+
     // 1. Actualizar estado del servicio a 'en_curso'
     servicio.estado = 'en_curso';
-    servicio.jefeId = jefeId;
     if (!servicio.horaInicioServicio) {
       servicio.horaInicioServicio = new Date();
     }
@@ -360,6 +485,9 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
               `• *Cliente:* ${servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
               `• *Duración:* ${servicio.duracionPactadaHoras} horas\n` +
               `• *Método de Pago:* ${servicio.metodoPago.toUpperCase()}\n\n` +
+              (servicio.notasJefe
+                ? `• *Notas del jefe:* ${servicio.notasJefe}\n\n`
+                : '') +
               `Cuando hayas terminado el servicio, presiona el botón de abajo para finalizarlo:`,
             {
               message_thread_id: threadId,
@@ -455,8 +583,11 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     servicio.jefeId = jefeId;
     await this.serviciosRepository.save(servicio);
 
-    // Actualizar disponibilidad de la empleada a true (disponible)
-    if (servicio.empleadaId) {
+    // Una reserva rechazada no vuelve disponible a quien aún sigue en servicio.
+    const activeService = await this.serviciosRepository.findOne({
+      where: { empleadaId: servicio.empleadaId, estado: 'en_curso' },
+    });
+    if (servicio.empleadaId && !activeService) {
       await this.serviciosRepository.manager
         .getRepository(Empleadas)
         .update(servicio.empleadaId, { disponible: true });
@@ -498,6 +629,190 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     }
 
     return servicio;
+  }
+
+  async recalculateScheduledSuccessor(activeServiceId: string): Promise<void> {
+    const active = await this.serviciosRepository.findOneBy({
+      id: activeServiceId,
+    });
+    if (!active) return;
+    const next = await this.serviciosRepository.findOne({
+      where: [
+        { servicioPrevioId: active.id, estado: 'pendiente' },
+        { servicioPrevioId: active.id, estado: 'agendado' },
+      ],
+      relations: { cliente: true, empleada: true },
+    });
+    if (!next) return;
+    const availableAt = this.estimatedEnd(active) ?? new Date();
+    next.horaDisponibilidadEstimada = availableAt;
+    next.horaInicioEstimada = new Date(
+      availableAt.getTime() + this.travelMinutes(active, next) * 60_000,
+    );
+    await this.serviciosRepository.save(next);
+    this.realtimeEventsService.emitToBoss(next.jefeId, {
+      type: 'scheduled_service_eta_updated',
+      data: next,
+    });
+    if (next.cliente?.telegramChatId) {
+      const eta = next.horaInicioEstimada.toLocaleTimeString('es-MX', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'America/Mexico_City',
+      });
+      const message = await this.aiMessageService.generateAgencyMessage(
+        'scheduled_eta_updated',
+        { employeeName: next.empleada?.nombreArtistico, eta },
+        `Soy el asistente de la agencia. La cita anterior se extendió; la nueva hora aproximada de llegada de ${next.empleada?.nombreArtistico || 'la empleada'} es ${eta}.`,
+      );
+      await this.bot.telegram
+        .sendMessage(next.cliente.telegramChatId, message)
+        .catch(() => undefined);
+      await this.recordAgencyMessage(next, message);
+    }
+  }
+
+  async activateScheduledSuccessor(
+    completedServiceId: string,
+  ): Promise<{ hasSuccessor: boolean; sameLocation: boolean }> {
+    const completed = await this.serviciosRepository.findOneBy({
+      id: completedServiceId,
+    });
+    if (!completed) return { hasSuccessor: false, sameLocation: false };
+    const next = await this.serviciosRepository.findOne({
+      where: { servicioPrevioId: completed.id, estado: 'agendado' },
+      relations: { cliente: true, empleada: { usuario: true }, jefe: true },
+    });
+    if (!next) return { hasSuccessor: false, sameLocation: false };
+
+    const sameLocation = Boolean(
+      completed.presetLocationId &&
+      next.presetLocationId === completed.presetLocationId,
+    );
+    if (sameLocation) {
+      next.estado = 'en_curso';
+      next.horaInicioServicio = new Date();
+      next.servicioPrevioId = null;
+      next.horaDisponibilidadEstimada = next.horaInicioServicio;
+      next.horaInicioEstimada = next.horaInicioServicio;
+      await this.serviciosRepository.save(next);
+      await this.notifyScheduledServiceStarted(next.id);
+      if (next.cliente?.telegramChatId) {
+        const message = await this.aiMessageService.generateAgencyMessage(
+          'employee_available',
+          { employeeName: next.empleada?.nombreArtistico },
+          `Soy el asistente de la agencia. ${next.empleada?.nombreArtistico || 'La empleada'} ya está disponible y se encuentra en la misma ubicación.`,
+        );
+        await this.bot.telegram.sendMessage(
+          next.cliente.telegramChatId,
+          message,
+        );
+        await this.recordAgencyMessage(next, message);
+      }
+    } else {
+      const provider = next.transporteAgendado ?? 'chofer';
+      const trip = await this.viajesRepository.save(
+        this.viajesRepository.create({
+          servicioId: next.id,
+          choferId: null,
+          tipo: 'ida',
+          zona: 'domicilio',
+          tarifa: provider === 'uber' ? 0 : this.driverPayoutFor(next),
+          driverPayout: provider === 'uber' ? 0 : this.driverPayoutFor(next),
+          estado: provider === 'uber' ? 'aceptado' : 'notificado',
+          proveedorTransporte: provider,
+        }),
+      );
+      if (provider === 'chofer') {
+        await this.dispatchViaje(trip.id);
+      } else {
+        const uberLink = this.buildUberLinkForTrip(next, 'ida');
+        const topic = this.getServiceTopic(next);
+        if (topic) {
+          await this.bot.telegram.sendMessage(
+            topic.chatId,
+            'La empleada terminó el servicio anterior. Solicita ahora el Uber hacia el siguiente servicio.',
+            {
+              message_thread_id: topic.threadId,
+              ...Markup.inlineKeyboard([
+                [Markup.button.url('📱 Pedir Uber', uberLink)],
+              ]),
+            },
+          );
+        }
+        const employeeChatId = next.empleada?.usuario?.telegramChatId;
+        if (employeeChatId) {
+          await this.bot.telegram.sendMessage(
+            employeeChatId,
+            'Tu siguiente servicio está listo. Usa este enlace para solicitar el Uber.',
+            {
+              ...Markup.inlineKeyboard([
+                [Markup.button.url('📱 Abrir Uber', uberLink)],
+                [
+                  Markup.button.callback(
+                    'Ya estoy en el Uber',
+                    `eu:${trip.id}:i`,
+                  ),
+                  Markup.button.callback('Ya llegué', `eu:${trip.id}:f`),
+                ],
+              ]),
+            },
+          );
+        }
+      }
+      if (next.cliente?.telegramChatId) {
+        const message = await this.aiMessageService.generateAgencyMessage(
+          'employee_en_route',
+          { employeeName: next.empleada?.nombreArtistico },
+          `Soy el asistente de la agencia. ${next.empleada?.nombreArtistico || 'La empleada'} terminó su servicio anterior y ahora va en camino.`,
+        );
+        await this.bot.telegram.sendMessage(
+          next.cliente.telegramChatId,
+          message,
+        );
+        await this.recordAgencyMessage(next, message);
+      }
+    }
+    this.realtimeEventsService.emitToBoss(next.jefeId, {
+      type: sameLocation
+        ? 'scheduled_service_started'
+        : 'scheduled_service_transport_started',
+      data: next,
+    });
+    return { hasSuccessor: true, sameLocation };
+  }
+
+  async notifyScheduledServiceStarted(serviceId: string): Promise<void> {
+    const service = await this.serviciosRepository.findOne({
+      where: { id: serviceId },
+      relations: { cliente: true, empleada: { usuario: true } },
+    });
+    const chatId = service?.empleada?.usuario?.telegramChatId;
+    if (!service || !chatId) return;
+    await this.bot.telegram.sendMessage(
+      chatId,
+      `💼 *Siguiente servicio iniciado*\n\n` +
+        `• *Cliente:* ${service.cliente?.nombreTelegram || 'Desconocido'}\n` +
+        `• *Duración:* ${service.duracionPactadaHoras} horas\n` +
+        (service.notasJefe ? `• *Notas del jefe:* ${service.notasJefe}\n` : ''),
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              '🏁 Finalizar Servicio',
+              `finalizar_servicio:${service.id}`,
+            ),
+          ],
+          [
+            Markup.button.callback(
+              '➕ Agregar Extra',
+              `agregar_extra_list:${service.id}`,
+            ),
+          ],
+        ]),
+      },
+    );
   }
 
   onModuleInit() {
@@ -1802,6 +2117,18 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
           estadoLiquidacion: 'cerrada',
         });
         await this.liquidationSync.syncOfficeRecord(trip.servicioId);
+      } else if (trip.servicio.estado === 'agendado') {
+        await this.serviciosRepository.update(trip.servicioId, {
+          estado: 'en_curso',
+          horaInicioServicio: now,
+          servicioPrevioId: null,
+          horaInicioEstimada: now,
+        });
+        this.realtimeEventsService.emitToBoss(trip.servicio.jefeId, {
+          type: 'scheduled_service_started',
+          data: { serviceId: trip.servicioId, tripId: trip.id },
+        });
+        await this.notifyScheduledServiceStarted(trip.servicioId);
       }
     }
 
