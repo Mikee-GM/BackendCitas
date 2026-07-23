@@ -4,6 +4,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Repository } from 'typeorm';
 import { Usuarios } from '../../users/entities/user.entity';
+import { ACCESS_COOKIE } from '../auth.constants';
+
+const cookieExtractor = (request: { signedCookies?: Record<string, string> }) =>
+  request?.signedCookies?.[ACCESS_COOKIE] ?? null;
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -12,7 +16,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly usuariosRepository: Repository<Usuarios>,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        cookieExtractor,
+      ]),
       ignoreExpiration: false,
       secretOrKey:
         process.env.JWT_SECRET ||
@@ -20,7 +27,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; email: string }) {
+  async validate(payload: { sub: string; email: string; type?: string }) {
+    if (payload.type && payload.type !== 'access') {
+      throw new UnauthorizedException('Tipo de token inválido');
+    }
     const user = await this.usuariosRepository.findOne({
       where: { id: payload.sub, activo: true },
     });

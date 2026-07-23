@@ -163,7 +163,6 @@ export const ApiLoginDocs = (bodyDto: ApiType): MethodDecorator =>
         'Credenciales validas. Devuelve token JWT y datos del usuario.',
       schema: {
         example: {
-          access_token: 'jwt.token.value',
           user: {
             id: '00000000-0000-4000-8000-000000000000',
             email: 'admin@example.com',

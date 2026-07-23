@@ -47,6 +47,12 @@ import { DisciplineModule } from './discipline/discipline.module';
         DATABASE_PASSWORD: Joi.string().required(),
         DATABASE_NAME: Joi.string().required(),
         JWT_SECRET: Joi.string().required(),
+        JWT_REFRESH_SECRET: Joi.string()
+          .required()
+          .invalid(Joi.ref('JWT_SECRET')),
+        COOKIE_SECRET: Joi.string().min(32).required(),
+        AUTH_COOKIE_DOMAIN: Joi.string().optional(),
+        AUTH_COOKIE_SAME_SITE: Joi.string().valid('lax', 'none').default('lax'),
         TELEGRAM_BOT_TOKEN: Joi.string().required(),
         PORT: Joi.number().default(4000),
         MAX_DAILY_AI_CALLS: Joi.number().default(15),

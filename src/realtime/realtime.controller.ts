@@ -1,11 +1,10 @@
 import {
   Controller,
-  Get,
   Sse,
   Query,
-  Res,
   UnauthorizedException,
-  Headers,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -18,6 +17,14 @@ import {
   ApiControllerDocs,
   ApiSseTokenDocs,
 } from '../common/swagger/api-docs.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Usuarios } from '../users/entities/user.entity';
+
+type RealtimeTokenPayload = {
+  sub: string;
+  rol: 'jefe' | 'admin' | 'empleada' | 'chofer' | 'cliente';
+  clienteId?: string;
+};
 
 @Controller('realtime')
 @ApiControllerDocs('realtime')
@@ -31,24 +38,25 @@ export class RealtimeController {
     private readonly choferesRepository: Repository<Choferes>,
   ) {}
 
-  private verifyToken(token: string): any {
+  private verifyToken(token: string): RealtimeTokenPayload {
     try {
-      return this.jwtService.verify(token);
-    } catch (e) {
+      return this.jwtService.verify<RealtimeTokenPayload>(token);
+    } catch {
       throw new UnauthorizedException('Token inválido o expirado');
     }
   }
 
   @Sse('sse/jefes')
+  @UseGuards(JwtAuthGuard)
   @ApiSseTokenDocs('Conectar canal SSE para panel de jefes')
-  sseJefes(@Query('token') token: string): Observable<any> {
-    const payload = this.verifyToken(token);
-    if (payload.rol !== 'jefe' && payload.rol !== 'admin') {
+  sseJefes(@Req() request: { user: Usuarios }): Observable<any> {
+    const user = request.user;
+    if (user.rol !== 'jefe' && user.rol !== 'admin') {
       throw new UnauthorizedException('No tienes permisos para este panel');
     }
-    return payload.rol === 'admin'
+    return user.rol === 'admin'
       ? this.realtimeEventsService.getJefesStream()
-      : this.realtimeEventsService.getBossStream(payload.sub);
+      : this.realtimeEventsService.getBossStream(user.id);
   }
 
   @Sse('sse/empleada')

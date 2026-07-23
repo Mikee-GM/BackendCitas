@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
@@ -13,12 +14,13 @@ async function bootstrap() {
 
   // Security headers using Helmet
   app.use(helmet());
+  app.use(cookieParser(process.env.COOKIE_SECRET));
 
   // Explicit CORS configuration
   app.enableCors({
-    origin: process.env.WEB_URL
-      ? [process.env.WEB_URL]
-      : ['http://localhost:3000'],
+    origin: (process.env.WEB_URL || 'http://localhost:3000')
+      .split(',')
+      .map((origin) => origin.trim()),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
@@ -62,4 +64,4 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 4000);
 }
-bootstrap();
+void bootstrap();
