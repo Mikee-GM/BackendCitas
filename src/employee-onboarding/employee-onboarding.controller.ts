@@ -5,6 +5,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -34,8 +35,10 @@ export class EmployeeOnboardingController {
   @Roles('admin')
   @ApiOperation({ summary: 'Consultar el reglamento vigente y sus preguntas' })
   @ApiOkResponse({ description: 'Reglamento vigente' })
-  getRegulation() {
-    return this.onboardingService.getCurrentRegulationForAdmin();
+  getRegulation(
+    @Query('targetRole') targetRole?: 'empleada' | 'chofer' | 'jefe',
+  ) {
+    return this.onboardingService.getCurrentRegulationForAdmin(targetRole);
   }
 
   @Put('regulation')

@@ -52,9 +52,9 @@ export class EmployeeOnboardingService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async getCurrentRegulation() {
+  async getCurrentRegulation(targetRole: 'empleada' | 'chofer' | 'jefe' = 'empleada') {
     const regulation = await this.regulationRepository.findOne({
-      where: {},
+      where: { targetRole },
       order: { updatedAt: 'DESC' },
     });
     if (!regulation) {
@@ -72,8 +72,8 @@ export class EmployeeOnboardingService {
     return { ...regulation, questions };
   }
 
-  async getCurrentRegulationForAdmin() {
-    const current = await this.getCurrentRegulation();
+  async getCurrentRegulationForAdmin(targetRole: 'empleada' | 'chofer' | 'jefe' = 'empleada') {
+    const current = await this.getCurrentRegulation(targetRole);
     const questions = await Promise.all(
       current.questions.map(async (question) => {
         const options = await this.optionRepository
@@ -103,9 +103,11 @@ export class EmployeeOnboardingService {
     const publicationKey = randomUUID();
     const publishedAt = new Date();
 
+    const targetRole = dto.targetRole || 'empleada';
+
     await this.dataSource.transaction(async (manager) => {
       let regulation = await manager.findOne(EmployeeRegulation, {
-        where: {},
+        where: { targetRole },
         order: { updatedAt: 'DESC' },
       });
 
@@ -124,6 +126,7 @@ export class EmployeeOnboardingService {
           publicationKey,
           publishedAt,
           updatedAt: publishedAt,
+          targetRole,
         });
       }
       regulation = await manager.save(EmployeeRegulation, regulation);
@@ -169,7 +172,7 @@ export class EmployeeOnboardingService {
       }
 
       const staff = await manager.find(Usuarios, {
-        where: { rol: In(['empleada', 'chofer', 'jefe']) },
+        where: { rol: targetRole },
       });
       const employeeProfiles =
         staff.length > 0
@@ -204,7 +207,7 @@ export class EmployeeOnboardingService {
       }
     });
 
-    return this.getCurrentRegulationForAdmin();
+    return this.getCurrentRegulationForAdmin(dto.targetRole || 'empleada');
   }
 
   async ensureCurrentAssignmentForUser(userId: string) {
@@ -220,8 +223,9 @@ export class EmployeeOnboardingService {
             where: { usuarioId: userId },
           })
         : null;
+    const targetRole = user.rol as 'empleada' | 'chofer' | 'jefe';
     const regulation = await this.regulationRepository.findOne({
-      where: {},
+      where: { targetRole },
       order: { updatedAt: 'DESC' },
     });
     if (!regulation) {
@@ -273,7 +277,9 @@ export class EmployeeOnboardingService {
   }
 
   async getRegulationForAssignment(assignment: EmployeeOnboarding) {
-    const regulation = await this.regulationRepository.findOne({ where: {} });
+    const regulation = await this.regulationRepository.findOne({
+      where: { publicationKey: assignment.publicationKey },
+    });
     if (
       !regulation ||
       regulation.publicationKey !== assignment.publicationKey
@@ -400,7 +406,7 @@ export class EmployeeOnboardingService {
       await manager.save(QuestionnaireAttempt, attempt);
 
       const regulation = await manager.findOne(EmployeeRegulation, {
-        where: {},
+        where: { publicationKey: onboarding.publicationKey },
       });
       if (!regulation) throw new NotFoundException('Reglamento no encontrado');
       onboarding.bestScore = Math.max(onboarding.bestScore, score);

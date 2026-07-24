@@ -58,6 +58,15 @@ export class PublishRegulationDto {
   @Max(100)
   readonly passingScore: number;
 
+  @ApiProperty({
+    example: 'empleada',
+    enum: ['empleada', 'chofer', 'jefe'],
+    required: false,
+  })
+  @IsString()
+  @IsNotEmpty()
+  readonly targetRole?: 'empleada' | 'chofer' | 'jefe';
+
   @ApiProperty({ type: [RegulationQuestionDto] })
   @IsArray()
   @ArrayMinSize(1)

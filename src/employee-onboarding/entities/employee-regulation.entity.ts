@@ -13,6 +13,14 @@ export class EmployeeRegulation {
   @ApiProperty()
   id: string;
 
+  @Column('enum', {
+    name: 'target_role',
+    enum: ['empleada', 'chofer', 'jefe'],
+    default: 'empleada',
+  })
+  @ApiProperty({ enum: ['empleada', 'chofer', 'jefe'] })
+  targetRole: 'empleada' | 'chofer' | 'jefe';
+
   @Column('character varying', { name: 'title', length: 255 })
   @ApiProperty()
   title: string;
