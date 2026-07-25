@@ -21,6 +21,7 @@ import { TelegramService } from './telegram.service';
 import { TelegramBookingUpdate } from './telegram-booking.update';
 import { TelegramOnboardingService } from './telegram-onboarding.service';
 import { GroupServicesService } from '../group-services/group-services.service';
+import { parseTelegramStartPayload } from './telegram-start-payload';
 
 @Update()
 export class TelegramAuthUpdate {
@@ -81,19 +82,18 @@ export class TelegramAuthUpdate {
       }
     }
 
-    // Interceptar deep link start para contratar (ej. /start contratar_ID o contratar_empleada_ID)
     const text = (ctx.message as any)?.text || '';
-    const parts = text.split(' ');
-    if (parts.length >= 2) {
-      const payload = parts[1];
-      if (payload.startsWith('contratar_')) {
-        let empleadaId = payload.replace('contratar_', '');
-        if (empleadaId.startsWith('empleada_')) {
-          empleadaId = empleadaId.replace('empleada_', '');
-        }
-        await this.telegramBookingUpdate.startHireSession(ctx, empleadaId);
-        return;
-      }
+    const startPayload = parseTelegramStartPayload(text);
+    if (startPayload.type === 'group_service' && !user && client) {
+      await this.telegramBookingUpdate.startDirectGroupSession(ctx as any);
+      return;
+    }
+    if (startPayload.type === 'employee_hire') {
+      await this.telegramBookingUpdate.startHireSession(
+        ctx,
+        startPayload.employeeId,
+      );
+      return;
     }
 
     if (user) {

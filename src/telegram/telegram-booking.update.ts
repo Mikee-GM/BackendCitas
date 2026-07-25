@@ -1,4 +1,6 @@
 import {
+  ConflictException,
+  ForbiddenException,
   Inject,
   forwardRef,
   Logger,
@@ -652,6 +654,35 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           ],
         },
       ];
+    }
+  }
+
+  async startDirectGroupSession(ctx: BotContext) {
+    ctx.session = {
+      bookingSessionId: randomUUID(),
+    };
+    try {
+      await this.handoffGroupRequest(ctx);
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        await ctx.reply(
+          'No es posible crear la solicitud porque tu cuenta no está habilitada para contratar. Contacta al equipo si necesitas ayuda.',
+        );
+        return;
+      }
+      if (error instanceof ConflictException) {
+        await ctx.reply(
+          'En este momento no hay un jefe disponible para organizar el servicio grupal. Inténtalo nuevamente más tarde.',
+        );
+        return;
+      }
+      this.logger.error(
+        'Error starting direct group service session',
+        error instanceof Error ? error.stack : String(error),
+      );
+      await ctx.reply(
+        'No pudimos iniciar el servicio grupal. Inténtalo nuevamente en unos minutos.',
+      );
     }
   }
 
@@ -3832,7 +3863,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   private async handoffGroupRequest(
     ctx: BotContext,
-    initialEmployeeId: string,
+    initialEmployeeId?: string,
   ): Promise<void> {
     const telegramId = ctx.from?.id?.toString();
     if (!telegramId) return;

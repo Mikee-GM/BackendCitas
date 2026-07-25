@@ -54,6 +54,7 @@ import { Context, Markup, Telegraf } from 'telegraf';
 import { ConfigService } from '@nestjs/config';
 import { OfficeLiquidationSyncService } from '../liquidations/office-liquidation-sync.service';
 import { ServicesService } from '../services/services.service';
+import { GroupBossAssignmentService } from './group-boss-assignment.service';
 
 type Actor = Pick<Usuarios, 'id' | 'rol'>;
 
@@ -87,6 +88,7 @@ export class GroupServicesService implements OnModuleInit, OnModuleDestroy {
     private readonly liquidationSync: OfficeLiquidationSyncService,
     @Inject(forwardRef(() => ServicesService))
     private readonly servicesService: ServicesService,
+    private readonly bossAssignment: GroupBossAssignmentService,
   ) {}
 
   onModuleInit(): void {
@@ -108,7 +110,7 @@ export class GroupServicesService implements OnModuleInit, OnModuleDestroy {
     const bossId =
       actor.rol === 'jefe'
         ? actor.id
-        : await this.resolveBossId(dto.initialEmployeeId, actor.id);
+        : await this.bossAssignment.resolve(dto.initialEmployeeId, actor.id);
     return this.createRequest(dto, bossId);
   }
 
@@ -117,7 +119,7 @@ export class GroupServicesService implements OnModuleInit, OnModuleDestroy {
     initialEmployeeId?: string,
     bookingSessionId?: string,
   ) {
-    const bossId = await this.resolveBossId(initialEmployeeId);
+    const bossId = await this.bossAssignment.resolve(initialEmployeeId);
     return this.createRequest(
       { clientId, initialEmployeeId, bookingSessionId },
       bossId,
@@ -1780,35 +1782,6 @@ export class GroupServicesService implements OnModuleInit, OnModuleDestroy {
   private assertOwner(request: GroupServiceRequest, actor: Actor): void {
     if (actor.rol !== 'admin' && request.bossId !== actor.id)
       throw new ForbiddenException('No puedes gestionar esta solicitud');
-  }
-
-  private async resolveBossId(initialEmployeeId?: string, fallback?: string) {
-    if (initialEmployeeId) {
-      const employee = await this.employees.findOne({
-        where: { id: initialEmployeeId },
-        relations: { jefe: true, jefeSecundario: true },
-      });
-      const boss =
-        employee?.jefe?.activo && employee.jefe.disponible
-          ? employee.jefe
-          : employee?.jefeSecundario?.activo
-            ? employee.jefeSecundario
-            : null;
-      if (boss) return boss.id;
-    }
-    if (fallback) return fallback;
-    const boss = await this.dataSource.getRepository(Usuarios).findOne({
-      where: [
-        { rol: 'jefe', activo: true, disponible: true },
-        { rol: 'admin', activo: true },
-      ],
-      order: { createdAt: 'ASC' },
-    });
-    if (!boss)
-      throw new ConflictException(
-        'No hay un jefe disponible para atender el servicio grupal',
-      );
-    return boss.id;
   }
 
   private async assertEmployeeFree(
