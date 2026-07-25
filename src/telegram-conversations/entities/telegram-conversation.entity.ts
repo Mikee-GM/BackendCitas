@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { Clientes } from '../../clients/entities/client.entity';
 import { Servicios } from '../../services/entities/service.entity';
+import { GroupServiceRequest } from '../../group-services/entities/group-service-request.entity';
 
 @Index('idx_conversaciones_cliente', ['clienteId'], {})
 @Index('idx_conversaciones_enviado_at', ['enviadoAt'], {})
@@ -36,6 +37,9 @@ export class ConversacionesTelegram {
 
   @Column('uuid', { name: 'booking_session_id', nullable: true })
   bookingSessionId: string | null;
+
+  @Column('uuid', { name: 'group_request_id', nullable: true })
+  groupRequestId: string | null;
 
   @Column('enum', {
     name: 'emisor',
@@ -82,5 +86,9 @@ export class ConversacionesTelegram {
   )
   @JoinColumn([{ name: 'servicio_id', referencedColumnName: 'id' }])
   @ApiProperty({ description: 'Servicio', type: () => Servicios })
-  servicio: Servicios;
+  servicio: Servicios | null;
+
+  @ManyToOne(() => GroupServiceRequest, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn([{ name: 'group_request_id', referencedColumnName: 'id' }])
+  groupRequest: GroupServiceRequest | null;
 }

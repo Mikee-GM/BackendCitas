@@ -9,7 +9,7 @@ export const RATING_DIRECTIONS = [
 export type RatingDirection = (typeof RATING_DIRECTIONS)[number];
 
 @Entity('interaction_ratings')
-@Index(['direction', 'serviceId'], {
+@Index(['direction', 'serviceId', 'employeeId'], {
   unique: true,
   where: `"service_id" IS NOT NULL AND "trip_id" IS NULL`,
 })

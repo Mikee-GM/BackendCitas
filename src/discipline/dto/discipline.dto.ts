@@ -20,6 +20,7 @@ import type { ConductCategory } from '../entities/conduct-report.entity';
 export class CreateRatingDto {
   @IsIn(RATING_DIRECTIONS) direction: RatingDirection;
   @IsUUID() interactionId: string;
+  @IsOptional() @IsUUID() employeeId?: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(5) stars: number;
   @ValidateIf((value: CreateRatingDto) => value.stars <= 2)
   @IsString()

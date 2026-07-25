@@ -34,6 +34,7 @@ import { TelegramOnboardingService } from './telegram-onboarding.service';
 import { TelegramOnboardingUpdate } from './telegram-onboarding.update';
 import { TelegramOnboardingScheduler } from './telegram-onboarding.scheduler';
 import { DisciplineModule } from '../discipline/discipline.module';
+import { GroupServicesModule } from '../group-services/group-services.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { DisciplineModule } from '../discipline/discipline.module';
     ExtensionsModule,
     TransportOperationsModule,
     DisciplineModule,
+    forwardRef(() => GroupServicesModule),
     TelegrafModule.forRootAsync({
       imports: [ConfigModule, TypeOrmModule.forFeature([TelegramSession])],
       useFactory: (

@@ -21,7 +21,12 @@ export class OfficeLiquidationSyncService {
   async syncOfficeRecord(serviceId: string): Promise<LiquidationRecord | null> {
     const service = await this.services.findOne({
       where: { id: serviceId },
-      relations: { jefe: true, viajes: true, extrasServicios: true },
+      relations: {
+        jefe: true,
+        viajes: true,
+        extrasServicios: true,
+        participantes: true,
+      },
     });
 
     if (!service) {
@@ -68,41 +73,71 @@ export class OfficeLiquidationSyncService {
       service.metodoPago === 'efectivo'
         ? Math.max(0, Number(service.totalFinal) - uberCost)
         : 0;
-    const electronicExtraAmount = (service.extrasServicios ?? [])
-      .filter((extra) => extra.metodoPago !== 'efectivo')
-      .reduce((sum, extra) => sum + Number(extra.precioCobrado), 0);
-    const values: Partial<LiquidationRecord> = {
-      serviceId: service.id,
-      employeeId: service.empleadaId,
-      registeredByUserId: service.jefeId,
-      sourceRole: service.jefe.rol,
-      occurredAt: service.horaFinServicio,
-      serviceTotal: Number(service.totalBase),
-      paymentMethod: service.metodoPago,
-      cashAmount:
-        service.metodoPago === 'efectivo' ? Number(service.totalBase) : 0,
-      cardAmounts: electronic ? [Number(service.totalBase)] : [],
-      companyPercentage: 40,
-      extraAmount: Number(service.totalExtras),
-      companyTransportExpense: 0,
-      customerTransportCharge: customerCharge,
-      employeeUberReimbursement,
-      employeeCashDue,
-      electronicExtraAmount,
-      transportExcess: 0,
-      promotion: false,
-      membershipAmount: 0,
-      place: null,
-      hasOutboundDriver: outboundDriver,
-      hasReturnDriver: returnDriver,
-      cancelled: false,
-      isFine: false,
-      fineAmount: 0,
-      updatedAt: new Date(),
-    };
+    const participantRows =
+      service.serviceType === 'grupal' && service.participantes?.length
+        ? service.participantes.filter(
+            (participant) => participant.status !== 'cancelada',
+          )
+        : [
+            {
+              id: null,
+              employeeId: service.empleadaId,
+              role: 'responsable',
+              confirmedSubtotal: Number(service.totalBase),
+            },
+          ];
+    const values = participantRows.map((participant) => {
+      const responsible = participant.role === 'responsable';
+      const participantExtras =
+        service.serviceType === 'grupal'
+          ? (service.extrasServicios ?? []).filter(
+              (extra) => extra.participantId === participant.id,
+            )
+          : service.extrasServicios ?? [];
+      const extraAmount =
+        service.serviceType === 'grupal'
+          ? participantExtras.reduce(
+              (sum, extra) => sum + Number(extra.precioCobrado),
+              0,
+            )
+          : Number(service.totalExtras);
+      const electronicParticipantExtras = participantExtras
+        .filter((extra) => extra.metodoPago !== 'efectivo')
+        .reduce((sum, extra) => sum + Number(extra.precioCobrado), 0);
+      const base = Number(participant.confirmedSubtotal);
+      return {
+        serviceId: service.id,
+        employeeId: participant.employeeId,
+        registeredByUserId: service.jefeId,
+        sourceRole: service.jefe.rol as 'admin' | 'jefe',
+        occurredAt: service.horaFinServicio!,
+        serviceTotal: base,
+        paymentMethod: service.metodoPago,
+        cashAmount: service.metodoPago === 'efectivo' ? base : 0,
+        cardAmounts: electronic ? [base] : [],
+        companyPercentage: 40,
+        extraAmount,
+        companyTransportExpense: 0,
+        customerTransportCharge: responsible ? customerCharge : 0,
+        employeeUberReimbursement:
+          responsible ? employeeUberReimbursement : 0,
+        employeeCashDue: responsible ? employeeCashDue : 0,
+        electronicExtraAmount: electronicParticipantExtras,
+        transportExcess: 0,
+        promotion: false,
+        membershipAmount: 0,
+        place: null,
+        hasOutboundDriver: responsible && outboundDriver,
+        hasReturnDriver: responsible && returnDriver,
+        cancelled: false,
+        isFine: false,
+        fineAmount: 0,
+        updatedAt: new Date(),
+      } satisfies Partial<LiquidationRecord>;
+    });
 
-    await this.records.upsert(values, {
-      conflictPaths: ['serviceId'],
+    await this.records.upsert(values.length === 1 ? values[0] : values, {
+      conflictPaths: ['serviceId', 'employeeId'],
       skipUpdateIfNoValuesChanged: true,
     });
     if (service.metodoPago === 'efectivo') {
@@ -110,7 +145,9 @@ export class OfficeLiquidationSyncService {
         serviceId: service.id,
       });
       if (existing?.status === 'paid') {
-        return this.records.findOneOrFail({ where: { serviceId: service.id } });
+        return this.records.findOneOrFail({
+          where: { serviceId: service.id, employeeId: service.empleadaId },
+        });
       }
       const paidAmount = Number(existing?.paidAmount ?? 0);
       const returnTrip = service.viajes?.find(
@@ -152,6 +189,8 @@ export class OfficeLiquidationSyncService {
         ['serviceId'],
       );
     }
-    return this.records.findOneOrFail({ where: { serviceId: service.id } });
+    return this.records.findOneOrFail({
+      where: { serviceId: service.id, employeeId: service.empleadaId },
+    });
   }
 }

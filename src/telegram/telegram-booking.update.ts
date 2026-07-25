@@ -44,6 +44,7 @@ import { ExtensionsService } from '../extensions/extensions.service';
 import { TransportOperationsService } from '../transport-operations/transport-operations.service';
 import { randomUUID } from 'crypto';
 import { DisciplineService } from '../discipline/discipline.service';
+import { GroupServicesService } from '../group-services/group-services.service';
 
 interface SessionData {
   step?:
@@ -59,7 +60,8 @@ interface SessionData {
     | 'AWAITING_UBER_SCREENSHOT'
     | 'AWAITING_UBER_FARE_ACTION'
     | 'AWAITING_UBER_FARE'
-    | 'CHAT_CON_EMPLEADA';
+    | 'CHAT_CON_EMPLEADA'
+    | 'GROUP_WITH_BOSS';
   empleadaId?: string;
   duracionPactadaHoras?: number;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto';
@@ -69,6 +71,7 @@ interface SessionData {
   locationNotas?: string | null;
   servicioIdCalificacion?: string;
   pendingRating?: number;
+  groupRatingEmployeeId?: string;
   disciplineTripId?: string;
   disciplineServiceId?: string;
   disciplineStars?: number;
@@ -86,9 +89,12 @@ interface SessionData {
   bookingSessionId?: string;
   selectedEmployeeBusy?: boolean;
   waitingForBusyChoice?: boolean;
+  groupIntentClarificationPending?: boolean;
+  groupRequestId?: string;
   extraSelection?: {
     servicioId: string;
     extraId: string;
+    participantId?: string;
   };
 }
 
@@ -159,6 +165,29 @@ export function extractHirePaymentMethod(
   return undefined;
 }
 
+export function detectGroupServiceIntent(
+  text: string,
+): 'grupal' | 'incierta' | 'individual' {
+  const normalized = text
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase();
+  if (
+    /\bservicio\s+grupal\b/.test(normalized) ||
+    /\b(grupo\s+de\s+(chicas|empleadas)|varias\s+(chicas|empleadas|modelos)|mas\s+de\s+una\s+(chica|empleada|modelo)|(dos|tres|cuatro)\s+(chicas|empleadas|modelos))\b/.test(
+      normalized,
+    )
+  )
+    return 'grupal';
+  if (
+    /\b(acompanada|con\s+una\s+amiga|trae\s+una\s+amiga|alguien\s+mas)\b/.test(
+      normalized,
+    )
+  )
+    return 'incierta';
+  return 'individual';
+}
+
 @Update()
 export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   private readonly logger = new Logger(TelegramBookingUpdate.name);
@@ -212,6 +241,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly extensionsService: ExtensionsService,
     private readonly transportOperations: TransportOperationsService,
     private readonly disciplineService: DisciplineService,
+    private readonly groupServicesService: GroupServicesService,
     private readonly configService: ConfigService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
@@ -370,6 +400,57 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     if (!match) return;
     const empleadaId = match[1];
     await this.startHireSession(ctx, empleadaId);
+  }
+
+  @Action(/^gs:([^:]+):([^:]+):(\d+)$/)
+  async onToggleGroupCatalogSelection(@Ctx() ctx: BotContext) {
+    const match = (ctx as any).match;
+    try {
+      const result = await this.groupServicesService.toggleCatalogSelection(
+        match[1],
+        match[2],
+        Number(match[3]),
+      );
+      await ctx.answerCbQuery(
+        result.selected
+          ? `${result.employeeName} seleccionada`
+          : `${result.employeeName} retirada`,
+      );
+      await ctx.editMessageReplyMarkup({
+        inline_keyboard: [
+          [
+            Markup.button.callback(
+              result.selected ? 'Retirar' : 'Seleccionar',
+              (ctx.callbackQuery as any).data,
+            ),
+          ],
+        ],
+      });
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message || 'No se pudo actualizar', {
+        show_alert: true,
+      });
+    }
+  }
+
+  @Action(/^gsc:([^:]+):(\d+)$/)
+  async onConfirmGroupCatalog(@Ctx() ctx: BotContext) {
+    const match = (ctx as any).match;
+    try {
+      const request =
+        await this.groupServicesService.confirmClientCatalog(
+          match[1],
+          Number(match[2]),
+        );
+      await ctx.answerCbQuery('Selección reservada');
+      await ctx.editMessageText(
+        `Tu selección de ${request.selections.filter((item) => item.status === 'reservada').length} empleadas quedó reservada durante 30 minutos. El jefe puede ajustarla antes de enviarte la cotización final.`,
+      );
+    } catch (error: any) {
+      await ctx.answerCbQuery(error.message || 'No se pudo reservar', {
+        show_alert: true,
+      });
+    }
   }
 
   @Action(/^esperar_ocupada:(.+)$/)
@@ -794,7 +875,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       });
       return;
     }
-
     if (servicio.estado !== 'en_curso') {
       await ctx.answerCbQuery('Este servicio ya no está activo.', {
         show_alert: true,
@@ -803,10 +883,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     await ctx.answerCbQuery();
+    const groupAccess =
+      servicio.serviceType === 'grupal'
+        ? await this.groupServicesService.participantAccess(
+            servicio.id,
+            ctx.from!.id.toString(),
+          )
+        : null;
+    const extrasEmployeeId =
+      groupAccess?.participant.employeeId ?? servicio.empleadaId;
 
     // Buscar extras activos de la empleada
     const extras = await this.extrasCatalogoRepository.find({
-      where: { empleadaId: servicio.empleadaId, activo: true },
+      where: { empleadaId: extrasEmployeeId, activo: true },
       order: { nombre: 'ASC' },
     });
 
@@ -822,7 +911,11 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       ctx.session = {};
     }
     // Guardar el servicioId inicial en la sesión
-    ctx.session.extraSelection = { servicioId, extraId: '' };
+    ctx.session.extraSelection = {
+      servicioId,
+      extraId: '',
+      participantId: groupAccess?.participant.id,
+    };
 
     const inlineButtons = extras.map((extra) => [
       Markup.button.callback(
@@ -885,7 +978,23 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       });
       return;
     }
-
+    const access =
+      servicio.serviceType === 'grupal'
+        ? await this.groupServicesService.participantAccess(
+            servicio.id,
+            ctx.from!.id.toString(),
+          )
+        : null;
+    if (
+      access &&
+      (extra.empleadaId !== access.participant.employeeId ||
+        session.extraSelection.participantId !== access.participant.id)
+    ) {
+      await ctx.answerCbQuery('Ese extra no pertenece a tu catálogo.', {
+        show_alert: true,
+      });
+      return;
+    }
     if (servicio.estado !== 'en_curso') {
       await ctx.answerCbQuery('Este servicio ya no está activo.', {
         show_alert: true,
@@ -934,7 +1043,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
-    const { servicioId, extraId } = session.extraSelection;
+    const { servicioId, extraId, participantId } = session.extraSelection;
     // Limpiar selección de la sesión
     delete session.extraSelection;
 
@@ -954,6 +1063,23 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
     if (!(await this.isAssignedEmployee(ctx, servicio))) {
       await ctx.answerCbQuery('No puedes modificar este servicio.', {
+        show_alert: true,
+      });
+      return;
+    }
+    const access =
+      servicio.serviceType === 'grupal'
+        ? await this.groupServicesService.participantAccess(
+            servicio.id,
+            ctx.from!.id.toString(),
+          )
+        : null;
+    if (
+      access &&
+      (extra.empleadaId !== access.participant.employeeId ||
+        participantId !== access.participant.id)
+    ) {
+      await ctx.answerCbQuery('Ese extra no pertenece a tu catálogo.', {
         show_alert: true,
       });
       return;
@@ -982,6 +1108,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     const extraServicio = this.extrasServicioRepository.create({
       servicioId: servicio.id,
       extraCatalogoId: extra.id,
+      participantId: participantId ?? null,
       precioCobrado: extra.precio,
       metodoPago: metodoPago,
       registradoPor: user,
@@ -1024,12 +1151,16 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     );
 
     const inlineButtons: any[] = [
-      [
-        Markup.button.callback(
-          '🏁 Finalizar Servicio',
-          `finalizar_servicio:${servicio.id}`,
-        ),
-      ],
+      ...(servicio.serviceType !== 'grupal' || access?.responsible
+        ? [
+            [
+              Markup.button.callback(
+                '🏁 Finalizar Servicio',
+                `finalizar_servicio:${servicio.id}`,
+              ),
+            ],
+          ]
+        : []),
       [
         Markup.button.callback(
           '➕ Agregar Extra',
@@ -1078,6 +1209,19 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         show_alert: true,
       });
       return;
+    }
+    if (servicio.serviceType === 'grupal') {
+      const access = await this.groupServicesService.participantAccess(
+        servicio.id,
+        telegramId,
+      );
+      if (!access?.responsible) {
+        await ctx.answerCbQuery(
+          'Solamente la responsable puede finalizar el servicio.',
+          { show_alert: true },
+        );
+        return;
+      }
     }
 
     if (servicio.estado !== 'en_curso') {
@@ -1221,6 +1365,101 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       return;
     }
 
+    const senderTelegramId = ctx.from?.id.toString();
+    const groupRequest = senderTelegramId
+      ? await this.groupServicesService.findActiveRequestByClientTelegram(
+          senderTelegramId,
+        )
+      : null;
+    if (
+      groupRequest?.service &&
+      groupRequest.service.metodoPago === 'transferencia' &&
+      Number(groupRequest.service.pendingBalance) > 0.009
+    ) {
+      const photos = (ctx.message as any)?.photo as
+        | Array<{ file_id: string }>
+        | undefined;
+      const fileId = photos?.[photos.length - 1]?.file_id;
+      if (!fileId) return;
+      const pending = Number(groupRequest.service.pendingBalance);
+      const processing = await ctx.reply(
+        'Verificando el comprobante del servicio grupal...',
+      );
+      try {
+        const fileUrl = await ctx.telegram.getFileLink(fileId);
+        const analysis = await this.aiMessageService.analyzeReceipt(
+          fileUrl.href,
+          pending,
+        );
+        await ctx.telegram
+          .deleteMessage(ctx.chat!.id, processing.message_id)
+          .catch(() => undefined);
+        const amount = Number(analysis.amount ?? 0);
+        if (!analysis.valid || amount <= 0) {
+          await ctx.reply(
+            `No se pudo aprobar el comprobante: ${analysis.reason || 'no se identificó un pago válido'}.`,
+          );
+          return;
+        }
+        const validation = await this.paymentReceiptValidationsRepository.save(
+          this.paymentReceiptValidationsRepository.create({
+            fechaRecepcion: new Date(),
+            horaRecepcion: new Date().toISOString().slice(11, 19),
+            clienteTelegram: groupRequest.client.nombreTelegram ?? undefined,
+            chatId: senderTelegramId,
+            esComprobante: true,
+            bancoOrigen: analysis.bankOrigin ?? analysis.bancoOrigen,
+            bancoDestino: analysis.bankDestination ?? analysis.bancoDestino,
+            titularDestino:
+              analysis.destinationHolder ?? analysis.titularDestino,
+            cuentaDestino:
+              analysis.destinationAccount ?? analysis.cuentaDestino,
+            clabe: analysis.clabe,
+            monto: amount,
+            fechaTransferencia:
+              analysis.transferDate ?? analysis.fechaTransferencia,
+            horaTransferencia:
+              analysis.transferTime ?? analysis.horaTransferencia,
+            referencia: analysis.reference ?? analysis.referencia,
+            folio: analysis.folio,
+            idSpei:
+              analysis.trackingKey ?? analysis.idSpei ?? analysis.claveRastreo,
+            concepto: analysis.concept ?? analysis.concepto,
+            confianza: analysis.confidence ?? analysis.confianza,
+            estado: 'APROBADO',
+            observaciones: analysis.reason ?? null,
+            jsonIA: analysis,
+            servicioId: groupRequest.service.id,
+          }),
+        );
+        const updated = await this.groupServicesService.registerPayment(
+          groupRequest.service.id,
+          {
+            amount,
+            receiptValidationId: validation.id,
+          },
+          { id: groupRequest.bossId, rol: 'jefe' },
+        );
+        if (Number(updated.pendingBalance) > 0.009) {
+          await ctx.reply(
+            `Comprobante aprobado por $${amount.toFixed(2)}. Saldo pendiente: $${Number(updated.pendingBalance).toFixed(2)}.`,
+          );
+        } else {
+          await ctx.reply(
+            'Comprobante aprobado. El jefe ya puede iniciar o aplicar el cambio del servicio grupal.',
+          );
+        }
+      } catch (error: any) {
+        await ctx.telegram
+          .deleteMessage(ctx.chat!.id, processing.message_id)
+          .catch(() => undefined);
+        await ctx.reply(
+          error.message || 'No fue posible validar el comprobante.',
+        );
+      }
+      return;
+    }
+
     if (ctx.session?.step === 'AWAITING_PAYMENT_RECEIPT') {
       const {
         locationLat,
@@ -1356,6 +1595,44 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.answerCbQuery('No puedes modificar este servicio.', {
         show_alert: true,
       });
+      return;
+    }
+
+    if (servicio.serviceType === 'grupal') {
+      try {
+        const finished =
+          await this.groupServicesService.finishByResponsible(
+            servicio.id,
+            telegramId,
+          );
+        await ctx.answerCbQuery('Servicio grupal finalizado');
+        await ctx.editMessageText(
+          `Servicio grupal finalizado\n\nDuración real: ${Number(finished?.duracionFinalHoras ?? 0).toFixed(2)} horas\nTotal del grupo: $${Number(finished?.totalFinal ?? 0).toFixed(2)}\nParticipantes: ${finished?.participantes?.filter((item) => item.status !== 'cancelada').length ?? 0}`,
+        );
+        if (finished?.cliente?.telegramChatId) {
+          for (const participant of finished.participantes?.filter(
+            (item) => item.status !== 'cancelada',
+          ) ?? []) {
+            await ctx.telegram.sendMessage(
+              finished.cliente.telegramChatId,
+              `Califica individualmente a ${participant.employee?.nombreArtistico ?? 'la empleada'}:`,
+              Markup.inlineKeyboard([
+                [1, 2, 3, 4, 5].map((stars) =>
+                  Markup.button.callback(
+                    `${stars} ⭐`,
+                    `g_rate:${finished.id.slice(0, 8)}:${participant.employeeId.slice(0, 8)}:${stars}`,
+                  ),
+                ),
+              ]),
+            );
+          }
+        }
+      } catch (error: any) {
+        await ctx.answerCbQuery(
+          error.message || 'No se pudo finalizar el servicio',
+          { show_alert: true },
+        );
+      }
       return;
     }
 
@@ -1678,6 +1955,56 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
   }
 
+  @Action(/^g_rate:([0-9a-f]{8}):([0-9a-f]{8}):([1-5])$/)
+  async onCalificarParticipanteGrupal(@Ctx() ctx: BotContext) {
+    await ctx.answerCbQuery();
+    const match = (ctx as any).match;
+    if (!match) return;
+    const [services, employees] = await Promise.all([
+      this.serviciosRepository
+        .createQueryBuilder('service')
+        .where('service.id::text LIKE :prefix', { prefix: `${match[1]}%` })
+        .andWhere('service.serviceType = :type', { type: 'grupal' })
+        .getMany(),
+      this.empleadasRepository
+        .createQueryBuilder('employee')
+        .where('employee.id::text LIKE :prefix', { prefix: `${match[2]}%` })
+        .getMany(),
+    ]);
+    if (services.length !== 1 || employees.length !== 1) {
+      await ctx.reply('No fue posible identificar esta calificación.');
+      return;
+    }
+    const client = await this.clientesRepository.findOne({
+      where: { telegramChatId: ctx.from!.id.toString() },
+    });
+    if (!client) {
+      await ctx.reply('No fue posible identificar al cliente.');
+      return;
+    }
+    const stars = Number(match[3]);
+    if (stars <= 2) {
+      ctx.session ??= {};
+      ctx.session.step = 'AWAITING_RATING_COMMENT';
+      ctx.session.servicioIdCalificacion = services[0].id;
+      ctx.session.groupRatingEmployeeId = employees[0].id;
+      ctx.session.pendingRating = stars;
+      await ctx.editMessageText(
+        `Has calificado con ${'⭐'.repeat(stars)} a ${employees[0].nombreArtistico}.\n\nPor favor, escribe un comentario indicando qué podemos mejorar.`,
+      );
+      return;
+    }
+    await this.disciplineService.createClientRating(client.id, {
+      direction: 'client_to_employee',
+      interactionId: services[0].id,
+      employeeId: employees[0].id,
+      stars,
+    });
+    await ctx.editMessageText(
+      `Gracias por calificar a ${employees[0].nombreArtistico} con ${'⭐'.repeat(stars)}.`,
+    );
+  }
+
   private reportCategoryLabel(category: ReportCategory): string {
     return (
       {
@@ -1830,6 +2157,25 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     const cached = this.userLocationCache.get(telegramId);
     const parsedLat = parseFloat(lat);
     const parsedLng = parseFloat(lng);
+
+    if (ctx.chat?.type === 'private') {
+      const groupRequest =
+        await this.groupServicesService.findActiveRequestByClientTelegram(
+          telegramId,
+        );
+      if (groupRequest && !groupRequest.serviceId) {
+        await this.groupServicesService.setLocationFromClient(
+          groupRequest.id,
+          parsedLat,
+          parsedLng,
+        );
+        await ctx.reply(
+          'Ubicación recibida. El jefe ya puede verla en el organizador del servicio.',
+          Markup.removeKeyboard(),
+        );
+        return;
+      }
+    }
 
     if (cached) {
       const diffMs = nowTime - cached.lastSaved;
@@ -2739,6 +3085,31 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
               where: { telegramChatId: senderTelegramId },
             })
           : null;
+        const groupRequest =
+          actor && chatId
+            ? await this.groupServicesService.findRequestByThread(
+                threadId.toString(),
+                chatId,
+              )
+            : null;
+        if (
+          groupRequest &&
+          actor &&
+          (actor.rol === 'admin' ||
+            (actor.rol === 'jefe' && groupRequest.bossId === actor.id)) &&
+          groupRequest.client?.telegramChatId
+        ) {
+          await ctx.telegram.sendMessage(
+            groupRequest.client.telegramChatId,
+            text,
+          );
+          await this.groupServicesService.recordRequestConversation(
+            groupRequest,
+            'jefe',
+            text,
+          );
+          return;
+        }
         const service = await this.serviciosRepository.findOne({
           where: {
             telegramThreadId: threadId.toString(),
@@ -2781,6 +3152,29 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     // Flujo 1: Mensajes del Cliente hacia el Súpergrupo del Jefe Asignado (Webhook de Entrada)
     if (ctx.chat?.type === 'private') {
       try {
+        const groupRequest =
+          await this.groupServicesService.findActiveRequestByClientTelegram(
+            telegramId,
+          );
+        if (
+          groupRequest &&
+          groupRequest.boss?.grupoTelegramId &&
+          groupRequest.telegramThreadId
+        ) {
+          await this.groupServicesService.recordRequestConversation(
+            groupRequest,
+            'cliente',
+            text,
+          );
+          await ctx.telegram.sendMessage(
+            groupRequest.boss.grupoTelegramId,
+            text,
+            {
+              message_thread_id: Number(groupRequest.telegramThreadId),
+            },
+          );
+          return;
+        }
         const activeService = await this.serviciosRepository.findOne({
           where: {
             clienteTelegramId: telegramId,
@@ -2977,6 +3371,35 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       if (!userMessage.trim()) return;
       await this.recordDraftConversation(ctx, 'cliente', userMessage);
 
+      const normalizedAnswer = userMessage.trim().toLowerCase();
+      if (session.groupIntentClarificationPending) {
+        if (/^(s[ií]|claro|correcto|exacto|varias|más de una)\b/.test(normalizedAnswer)) {
+          await this.handoffGroupRequest(ctx, empleadaId);
+          return;
+        }
+        if (/^(no|solo una|solamente una)\b/.test(normalizedAnswer)) {
+          session.groupIntentClarificationPending = false;
+        } else {
+          await ctx.reply(
+            'Solo para confirmar: ¿quieres contratar a dos o más empleadas?',
+          );
+          return;
+        }
+      } else {
+        const groupIntent = detectGroupServiceIntent(userMessage);
+        if (groupIntent === 'grupal') {
+          await this.handoffGroupRequest(ctx, empleadaId);
+          return;
+        }
+        if (groupIntent === 'incierta') {
+          session.groupIntentClarificationPending = true;
+          await ctx.reply(
+            '¿Quieres que el servicio incluya a dos o más empleadas?',
+          );
+          return;
+        }
+      }
+
       if (session.waitingForBusyChoice) {
         const normalized = userMessage.toLowerCase();
         if (
@@ -3034,6 +3457,18 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           history,
           telegramId,
         );
+
+        if (responseText.includes('[GROUP_INTENT]')) {
+          await this.handoffGroupRequest(ctx, empleadaId);
+          return;
+        }
+        if (responseText.includes('[GROUP_UNCLEAR]')) {
+          session.groupIntentClarificationPending = true;
+          await ctx.reply(
+            '¿Quieres que el servicio incluya a dos o más empleadas?',
+          );
+          return;
+        }
 
         // Strip DATA block unconditionally before sending to user
         const cleanText = responseText
@@ -3189,11 +3624,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           await this.disciplineService.createClientRating(client.id, {
             direction: 'client_to_employee',
             interactionId: servicio.id,
+            employeeId: ctx.session?.groupRatingEmployeeId,
             stars: rating,
             comment: comments,
           });
           servicio.comentariosCalificacion = comments;
           servicio.calificacion = rating;
+          if (ctx.session) ctx.session.groupRatingEmployeeId = undefined;
 
           await this.serviciosRepository.save(servicio);
 
@@ -3393,12 +3830,94 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
   }
 
+  private async handoffGroupRequest(
+    ctx: BotContext,
+    initialEmployeeId: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id?.toString();
+    if (!telegramId) return;
+    const client = await this.clientesRepository.findOne({
+      where: { telegramChatId: telegramId },
+    });
+    if (!client) {
+      await ctx.reply(
+        'No pude identificar tu registro de cliente. Vuelve a abrir el enlace de contratación.',
+      );
+      return;
+    }
+    const request =
+      await this.groupServicesService.createFromDetectedIntent(
+        client.id,
+        initialEmployeeId,
+        ctx.session?.bookingSessionId,
+      );
+    ctx.session = {
+      ...(ctx.session ?? {}),
+      step: 'GROUP_WITH_BOSS',
+      groupRequestId: request.id,
+      groupIntentClarificationPending: false,
+    };
+
+    const bossGroupId = request.boss?.grupoTelegramId;
+    if (bossGroupId && !request.telegramThreadId) {
+      const clientName =
+        client.nombreTelegram || ctx.from?.first_name || 'Cliente';
+      const topic = await ctx.telegram.createForumTopic(
+        bossGroupId,
+        `Grupo: ${clientName}`,
+      );
+      await this.groupServicesService.setTelegramThread(
+        request.id,
+        topic.message_thread_id.toString(),
+      );
+      await ctx.telegram.sendMessage(
+        bossGroupId,
+        `Solicitud de servicio grupal\nCliente: ${clientName}\nLa IA fue desactivada. Organiza participantes, ubicación, horas, pago y transporte desde el panel del jefe.`,
+        { message_thread_id: topic.message_thread_id },
+      );
+      const history = await this.conversationsRepository.find({
+        where: { groupRequestId: request.id },
+        order: { enviadoAt: 'ASC' },
+      });
+      for (const item of history) {
+        const label =
+          item.emisor === 'cliente'
+            ? 'Cliente'
+            : item.emisor === 'ia'
+              ? 'IA'
+              : 'Sistema';
+        await ctx.telegram.sendMessage(
+          bossGroupId,
+          `${label}: ${item.mensaje}`,
+          { message_thread_id: topic.message_thread_id },
+        );
+      }
+    }
+    const message =
+      'Entendido. Te estoy comunicando con el jefe para organizar el servicio grupal y confirmar disponibilidad, precio y transporte.';
+    await ctx.reply(message, Markup.removeKeyboard());
+    await this.groupServicesService.recordRequestConversation(
+      request,
+      'sistema',
+      message,
+    );
+  }
+
   private async isAssignedEmployee(
     ctx: Context,
     service: Servicios,
   ): Promise<boolean> {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return false;
+
+    if (service.serviceType === 'grupal') {
+      return Boolean(
+        await this.groupServicesService.participantAccess(
+          service.id,
+          telegramId,
+        ),
+      );
+    }
 
     const employee = await this.empleadasRepository.findOne({
       where: {

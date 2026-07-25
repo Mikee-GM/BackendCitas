@@ -27,7 +27,7 @@ export class LiquidationRecord {
   })
   id: string;
 
-  @Column('uuid', { name: 'service_id', nullable: true, unique: true })
+  @Column('uuid', { name: 'service_id', nullable: true })
   serviceId: string | null;
 
   @Column('uuid', { name: 'employee_id' })

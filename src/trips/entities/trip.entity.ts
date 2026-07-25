@@ -1,13 +1,25 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+} from 'typeorm';
 import { Choferes } from '../../drivers/entities/driver.entity';
 import { Servicios } from '../../services/entities/service.entity';
 import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
+import { TripPassenger } from '../../group-services/entities/trip-passenger.entity';
 
 @Index('idx_viajes_chofer', ['choferId'], {})
 @Index('idx_viajes_estado', ['estado'], {})
 @Index('viajes_pkey', ['id'], { unique: true })
-@Index('viajes_servicio_id_tipo_key', ['servicioId', 'tipo'], { unique: true })
+@Index(
+  'idx_viajes_servicio_tipo_unidad_key',
+  ['servicioId', 'tipo', 'unitNumber'],
+  { unique: true },
+)
 @Index('idx_viajes_servicio', ['servicioId'], {})
 @Entity('viajes', { schema: 'public' })
 export class Viajes {
@@ -43,6 +55,10 @@ export class Viajes {
     example: 'ida',
   })
   tipo: 'ida' | 'regreso';
+
+  @Column('smallint', { name: 'unit_number', default: 1 })
+  @ApiProperty({ description: 'Número de unidad dentro del sentido', example: 1 })
+  unitNumber: number;
 
   @Column('enum', {
     name: 'zona',
@@ -235,4 +251,7 @@ export class Viajes {
   @JoinColumn([{ name: 'servicio_id', referencedColumnName: 'id' }])
   @ApiProperty({ description: 'Servicio', type: () => Servicios })
   servicio: Servicios;
+
+  @OneToMany(() => TripPassenger, (passenger) => passenger.trip)
+  passengers: TripPassenger[];
 }

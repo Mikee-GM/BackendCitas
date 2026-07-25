@@ -1,4 +1,5 @@
 import {
+  detectGroupServiceIntent,
   extractHireDuration,
   extractHirePaymentMethod,
   isUberAdminInputSession,
@@ -6,6 +7,15 @@ import {
 } from './telegram-booking.update';
 
 describe('Telegram booking session input parsing', () => {
+  it.each([
+    ['quiero dos chicas para el servicio', 'grupal'],
+    ['busco un servicio grupal', 'grupal'],
+    ['puedes venir con una amiga', 'incierta'],
+    ['quiero dos horas contigo', 'individual'],
+  ])('clasifica la intención de %s como %s', (text, expected) => {
+    expect(detectGroupServiceIntent(text)).toBe(expected);
+  });
+
   it.each([
     ['2', 2],
     ['quiero 3 horas', 3],

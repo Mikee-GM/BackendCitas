@@ -244,11 +244,39 @@ export class EmployeesService {
       },
       order: { createdAt: 'ASC' },
     });
+    const groupRows: Array<{
+      employee_id: string;
+      estado: string;
+      hora_inicio_servicio: Date | null;
+      duracion_pactada_horas: string;
+    }> = await this.dataSource.query(
+      `SELECT p.employee_id, s.estado, s.hora_inicio_servicio,
+              s.duracion_pactada_horas
+       FROM service_participants p
+       INNER JOIN servicios s ON s.id = p.service_id
+       WHERE p.employee_id = ANY($1::uuid[])
+         AND p.status IN ('reservada','pendiente_pago','activa')
+         AND s.estado IN ('pendiente','agendado','en_curso')`,
+      [ids],
+    );
     const activeByEmployee = new Map(
       services
         .filter((service) => service.estado === 'en_curso')
         .map((service) => [service.empleadaId, service]),
     );
+    for (const row of groupRows.filter((item) => item.estado === 'en_curso')) {
+      if (!activeByEmployee.has(row.employee_id)) {
+        activeByEmployee.set(
+          row.employee_id,
+          {
+            empleadaId: row.employee_id,
+            horaInicioServicio: row.hora_inicio_servicio,
+            duracionPactadaHoras: Number(row.duracion_pactada_horas),
+            estado: 'en_curso',
+          } as Servicios,
+        );
+      }
+    }
     const queuedEmployees = new Set(
       services
         .filter(
@@ -258,6 +286,9 @@ export class EmployeesService {
         )
         .map((service) => service.empleadaId),
     );
+    for (const row of groupRows.filter((item) => item.estado !== 'en_curso')) {
+      queuedEmployees.add(row.employee_id);
+    }
 
     return employees.map((employee) => {
       employee.clientRatingAverage = employee.promedioCalificacion;

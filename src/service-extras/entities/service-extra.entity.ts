@@ -4,6 +4,7 @@ import { ExtrasCatalogo } from '../../catalog-extras/entities/catalog-extra.enti
 import { Usuarios } from '../../users/entities/user.entity';
 import { Servicios } from '../../services/entities/service.entity';
 import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
+import { ServiceParticipant } from '../../group-services/entities/service-participant.entity';
 
 @Index('idx_extras_servicio_catalogo', ['extraCatalogoId'], {})
 @Index('extras_servicio_pkey', ['id'], { unique: true })
@@ -34,6 +35,9 @@ export class ExtrasServicio {
     example: '00000000-0000-4000-8000-000000000000',
   })
   extraCatalogoId: string;
+
+  @Column('uuid', { name: 'participant_id', nullable: true })
+  participantId: string | null;
 
   @Column('numeric', {
     name: 'precio_cobrado',
@@ -89,4 +93,8 @@ export class ExtrasServicio {
   @JoinColumn([{ name: 'servicio_id', referencedColumnName: 'id' }])
   @ApiProperty({ description: 'Servicio', type: () => Servicios })
   servicio: Servicios;
+
+  @ManyToOne(() => ServiceParticipant, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn([{ name: 'participant_id', referencedColumnName: 'id' }])
+  participant: ServiceParticipant | null;
 }

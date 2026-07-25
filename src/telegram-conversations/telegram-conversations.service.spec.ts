@@ -9,7 +9,7 @@ describe('TelegramConversationsService', () => {
   };
   const services = { findOne: jest.fn() };
   const bot = { telegram: { sendMessage: jest.fn() } };
-  const realtime = { emitToBoss: jest.fn() };
+  const realtime = { emitToBoss: jest.fn(), emitToBosses: jest.fn() };
   const subject = new TelegramConversationsService(
     conversations as any,
     services as any,
@@ -42,8 +42,8 @@ describe('TelegramConversationsService', () => {
       'Buenas tardes',
     );
     expect(conversations.save).toHaveBeenCalled();
-    expect(realtime.emitToBoss).toHaveBeenCalledWith(
-      'boss-1',
+    expect(realtime.emitToBosses).toHaveBeenCalledWith(
+      ['boss-1', undefined, undefined],
       expect.objectContaining({ type: 'chat_message' }),
     );
     expect(result.mensaje).toBe('Buenas tardes');

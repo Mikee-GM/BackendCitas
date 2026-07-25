@@ -81,10 +81,33 @@ export class RealtimeEventsService {
 
   emitToJefes(event: any) {
     this.jefesSubject.next(event);
+    for (const subject of this.bossSubjects.values()) {
+      subject.next(event);
+    }
   }
 
-  emitToBoss(bossId: string, event: any) {
-    this.bossSubjects.get(bossId)?.next(event);
+  emitToBoss(bossId: string | null | undefined, event: any) {
+    if (bossId) {
+      this.bossSubjects.get(bossId)?.next(event);
+    } else {
+      for (const subject of this.bossSubjects.values()) {
+        subject.next(event);
+      }
+    }
+    this.jefesSubject.next(event);
+  }
+
+  emitToBosses(bossIds: (string | null | undefined)[], event: any) {
+    const uniqueIds = Array.from(
+      new Set(bossIds.filter((id): id is string => Boolean(id))),
+    );
+    if (uniqueIds.length === 0) {
+      this.emitToJefes(event);
+      return;
+    }
+    for (const id of uniqueIds) {
+      this.bossSubjects.get(id)?.next(event);
+    }
     this.jefesSubject.next(event);
   }
 

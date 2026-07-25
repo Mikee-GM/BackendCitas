@@ -18,6 +18,8 @@ import { Usuarios } from '../../users/entities/user.entity';
 import { Viajes } from '../../trips/entities/trip.entity';
 import { LoyaltyTransaction } from '../../loyalty/entities/loyalty-transaction.entity';
 import { ColumnNumericTransformer } from '../../common/transformers/column-numeric.transformer';
+import { ServiceParticipant } from '../../group-services/entities/service-participant.entity';
+import { ServicePayment } from '../../group-services/entities/service-payment.entity';
 
 @Index('idx_servicios_cliente', ['clienteId'], {})
 @Index('idx_servicios_created_at', ['createdAt'], {})
@@ -37,6 +39,10 @@ export class Servicios {
     example: '00000000-0000-4000-8000-000000000000',
   })
   id: string;
+
+  @Column('varchar', { name: 'service_type', length: 20, default: 'individual' })
+  @ApiProperty({ enum: ['individual', 'grupal'] })
+  serviceType: 'individual' | 'grupal';
 
   @Column('uuid', { name: 'empleada_id' })
   @ApiProperty({
@@ -148,6 +154,51 @@ export class Servicios {
   })
   @ApiProperty({ description: 'Total Final', example: 1200.0 })
   totalFinal: number;
+
+  @Column('numeric', {
+    name: 'total_paid',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
+  totalPaid: number;
+
+  @Column('numeric', {
+    name: 'pending_balance',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
+  pendingBalance: number;
+
+  @Column('numeric', {
+    name: 'transport_fee_snapshot',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
+  transportFeeSnapshot: number;
+
+  @Column('numeric', {
+    name: 'manual_transport_adjustment',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
+  manualTransportAdjustment: number;
+
+  @Column('numeric', {
+    name: 'pending_duration_hours',
+    precision: 4,
+    scale: 2,
+    nullable: true,
+    transformer: new ColumnNumericTransformer(),
+  })
+  pendingDurationHours: number | null;
 
   @Column('numeric', {
     name: 'total_transporte',
@@ -451,6 +502,17 @@ export class Servicios {
   @OneToMany(() => Viajes, (viajes) => viajes.servicio)
   @ApiProperty({ description: 'Viajes', type: () => [Viajes], example: [] })
   viajes: Viajes[];
+
+  @OneToMany(
+    () => ServiceParticipant,
+    (participant) => participant.service,
+  )
+  @ApiProperty({ type: () => [ServiceParticipant] })
+  participantes: ServiceParticipant[];
+
+  @OneToMany(() => ServicePayment, (payment) => payment.service)
+  @ApiProperty({ type: () => [ServicePayment] })
+  pagos: ServicePayment[];
 
   @OneToMany(
     () => LoyaltyTransaction,

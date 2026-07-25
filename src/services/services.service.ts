@@ -280,7 +280,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
               },
             ]
           : { estado: 'pendiente' },
-      relations: { cliente: true, empleada: true, viajes: true },
+      relations: {
+        cliente: true,
+        empleada: true,
+        participantes: { employee: true },
+        viajes: { passengers: { employee: true } },
+        pagos: true,
+      },
       order: { createdAt: 'DESC' },
     });
   }
@@ -295,7 +301,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
               { empleada: { jefeSecundarioId: actor.id } },
             ]
           : undefined,
-      relations: { cliente: true, empleada: true, viajes: true },
+      relations: {
+        cliente: true,
+        empleada: true,
+        participantes: { employee: true },
+        viajes: { passengers: { employee: true } },
+        pagos: true,
+      },
       order: { createdAt: 'DESC' },
     });
   }
@@ -303,7 +315,13 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
   async findOne(id: string): Promise<Servicios> {
     const servicio = await this.serviciosRepository.findOne({
       where: { id },
-      relations: { cliente: true, empleada: true, viajes: true },
+      relations: {
+        cliente: true,
+        empleada: true,
+        participantes: { employee: true },
+        viajes: { passengers: { employee: true } },
+        pagos: true,
+      },
     });
     if (!servicio) {
       throw new NotFoundException(`Servicio con ID ${id} no encontrado`);
@@ -368,6 +386,11 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     if (servicio.estado !== 'pendiente') {
       throw new ConflictException(
         'El servicio ya no está pendiente de aprobación',
+      );
+    }
+    if (servicio.serviceType === 'grupal') {
+      throw new ConflictException(
+        'Los servicios grupales se inician desde su organizador',
       );
     }
 
@@ -944,6 +967,7 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
           cliente: true,
           jefe: true,
         },
+        passengers: { employee: true },
       },
     });
 
@@ -961,17 +985,19 @@ export class ServicesService implements OnModuleInit, OnModuleDestroy {
     let searchLng: number;
 
     if (viaje.tipo === 'ida') {
-      if (
-        !viaje.servicio?.empleada?.ubicacionLat ||
-        !viaje.servicio?.empleada?.ubicacionLng
-      ) {
+      const passenger = viaje.passengers?.[0]?.employee;
+      const employeeLat =
+        passenger?.ubicacionLat ?? viaje.servicio?.empleada?.ubicacionLat;
+      const employeeLng =
+        passenger?.ubicacionLng ?? viaje.servicio?.empleada?.ubicacionLng;
+      if (employeeLat == null || employeeLng == null) {
         console.error(
           `[dispatchViaje] Ubicación de empleada faltante para viaje ${viajeId}.`,
         );
         return;
       }
-      searchLat = viaje.servicio.empleada.ubicacionLat;
-      searchLng = viaje.servicio.empleada.ubicacionLng;
+      searchLat = employeeLat;
+      searchLng = employeeLng;
     } else {
       if (
         !viaje.servicio?.ubicacionClienteLat ||

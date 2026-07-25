@@ -89,6 +89,7 @@ export class DisciplineService implements OnModuleInit, OnModuleDestroy {
       dto.interactionId,
       'client',
       clientId,
+      dto.employeeId,
     );
     return this.persistRating(dto, interaction);
   }
@@ -469,6 +470,7 @@ export class DisciplineService implements OnModuleInit, OnModuleDestroy {
     interactionId: string,
     actorType: PersonType,
     actorId: string,
+    targetEmployeeId?: string,
   ): Promise<ResolvedInteraction> {
     const usesTrip =
       direction === 'driver_to_employee' ||
@@ -493,6 +495,25 @@ export class DisciplineService implements OnModuleInit, OnModuleDestroy {
         );
     const row = rows[0];
     if (!row) throw new NotFoundException('Interacción no encontrada');
+    if (targetEmployeeId) {
+      if (direction !== 'client_to_employee' || usesTrip)
+        throw new BadRequestException('La empleada objetivo no es válida');
+      if (row.employee_id !== targetEmployeeId) {
+        const participants: Array<{ employee_id: string }> =
+          await this.dataSource.query(
+            `SELECT employee_id
+             FROM service_participants
+             WHERE service_id = $1 AND employee_id = $2
+               AND status <> 'cancelada'`,
+            [row.service_id, targetEmployeeId],
+          );
+        if (!participants.length)
+          throw new ForbiddenException(
+            'La empleada no participó en este servicio',
+          );
+      }
+      row.employee_id = targetEmployeeId;
+    }
     const finished =
       usesTrip ? row.trip_status === 'finalizado' : row.service_status === 'finalizado';
     if (!finished || !row.finished_at) {

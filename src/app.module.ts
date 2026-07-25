@@ -30,6 +30,7 @@ import { LiquidationsModule } from './liquidations/liquidations.module';
 import { TransportOperationsModule } from './transport-operations/transport-operations.module';
 import { EmployeeOnboardingModule } from './employee-onboarding/employee-onboarding.module';
 import { DisciplineModule } from './discipline/discipline.module';
+import { GroupServicesModule } from './group-services/group-services.module';
 
 @Module({
   imports: [
@@ -105,6 +106,7 @@ import { DisciplineModule } from './discipline/discipline.module';
     TransportOperationsModule,
     EmployeeOnboardingModule,
     DisciplineModule,
+    GroupServicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

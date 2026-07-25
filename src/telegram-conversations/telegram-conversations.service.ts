@@ -82,10 +82,17 @@ export class TelegramConversationsService {
         iaActiva: service.iaActiva,
       }),
     );
-    this.realtimeEvents.emitToBoss(service.jefeId, {
-      type: 'chat_message',
-      data: saved,
-    });
+    this.realtimeEvents.emitToBosses(
+      [
+        service.jefeId,
+        service.empleada?.jefeId,
+        service.empleada?.jefeSecundarioId,
+      ],
+      {
+        type: 'chat_message',
+        data: saved,
+      },
+    );
     return saved;
   }
 

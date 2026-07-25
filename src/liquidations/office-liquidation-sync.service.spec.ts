@@ -59,7 +59,9 @@ describe('OfficeLiquidationSyncService', () => {
         hasOutboundDriver: true,
         hasReturnDriver: false,
       }),
-      expect.objectContaining({ conflictPaths: ['serviceId'] }),
+      expect.objectContaining({
+        conflictPaths: ['serviceId', 'employeeId'],
+      }),
     );
   });
 
@@ -157,7 +159,73 @@ describe('OfficeLiquidationSyncService', () => {
     expect(records.upsert).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ serviceId: 'service' }),
-      expect.objectContaining({ conflictPaths: ['serviceId'] }),
+      expect.objectContaining({
+        conflictPaths: ['serviceId', 'employeeId'],
+      }),
+    );
+  });
+
+  it('crea un corte por participante y asigna transporte solo a la responsable', async () => {
+    services.findOne.mockResolvedValue(
+      finalized({
+        serviceType: 'grupal',
+        empleadaId: 'employee-responsible',
+        totalBase: 6000,
+        totalExtras: 500,
+        totalFinal: 6620,
+        participantes: [
+          {
+            id: 'participant-responsible',
+            employeeId: 'employee-responsible',
+            role: 'responsable',
+            status: 'retirada',
+            confirmedSubtotal: 2000,
+          },
+          {
+            id: 'participant-2',
+            employeeId: 'employee-2',
+            role: 'participante',
+            status: 'retirada',
+            confirmedSubtotal: 4000,
+          },
+        ],
+        extrasServicios: [
+          {
+            participantId: 'participant-2',
+            precioCobrado: 500,
+            metodoPago: 'efectivo',
+          },
+        ],
+      }),
+    );
+    records.findOneOrFail.mockResolvedValue({ id: 'responsible-record' });
+
+    await sync.syncOfficeRecord('service');
+
+    const values = records.upsert.mock.calls[0][0];
+    expect(values).toHaveLength(2);
+    expect(values).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          employeeId: 'employee-responsible',
+          serviceTotal: 2000,
+          customerTransportCharge: 120,
+          extraAmount: 0,
+        }),
+        expect.objectContaining({
+          employeeId: 'employee-2',
+          serviceTotal: 4000,
+          customerTransportCharge: 0,
+          extraAmount: 500,
+        }),
+      ]),
+    );
+    expect(cashObligations.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        employeeId: 'employee-responsible',
+        amount: 6620,
+      }),
+      ['serviceId'],
     );
   });
 });

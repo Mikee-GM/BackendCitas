@@ -10,7 +10,7 @@ import {
 } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { In, Repository, MoreThan } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
@@ -20,6 +20,7 @@ import { Viajes } from '../trips/entities/trip.entity';
 import { TelegramService } from './telegram.service';
 import { TelegramBookingUpdate } from './telegram-booking.update';
 import { TelegramOnboardingService } from './telegram-onboarding.service';
+import { GroupServicesService } from '../group-services/group-services.service';
 
 @Update()
 export class TelegramAuthUpdate {
@@ -42,6 +43,7 @@ export class TelegramAuthUpdate {
     @Inject(forwardRef(() => TelegramBookingUpdate))
     private readonly telegramBookingUpdate: TelegramBookingUpdate,
     private readonly telegramOnboardingService: TelegramOnboardingService,
+    private readonly groupServicesService: GroupServicesService,
   ) {}
 
   @Start()
@@ -236,21 +238,43 @@ export class TelegramAuthUpdate {
     const employee = await this.getEmployeeFromContext(ctx);
     if (!employee) return;
 
-    const service = await this.serviciosRepository.findOne({
+    let service = await this.serviciosRepository.findOne({
       where: { empleadaId: employee.id, estado: 'en_curso' },
       relations: { cliente: true },
       order: { horaInicioServicio: 'DESC' },
     });
+    if (!service) {
+      service = await this.serviciosRepository.findOne({
+        where: {
+          estado: 'en_curso',
+          serviceType: 'grupal',
+          participantes: { employeeId: employee.id, status: 'activa' },
+        },
+        relations: { cliente: true, participantes: true },
+        order: { horaInicioServicio: 'DESC' },
+      });
+    }
 
     if (!service) {
       await ctx.reply('No tienes un servicio activo en este momento.');
       return;
     }
 
-    const uberTrips = await this.viajesRepository.find({
+    const access =
+      service.serviceType === 'grupal'
+        ? await this.groupServicesService.participantAccess(
+            service.id,
+            ctx.from!.id.toString(),
+          )
+        : null;
+    const responsible =
+      service.serviceType !== 'grupal' || Boolean(access?.responsible);
+    const uberTrips = responsible
+      ? await this.viajesRepository.find({
       where: { servicioId: service.id, proveedorTransporte: 'uber' },
       order: { horaNotificacion: 'DESC' },
-    });
+        })
+      : [];
     const actionableUberTrip = uberTrips.find((trip) =>
       ['llegado', 'en_curso'].includes(trip.estado),
     );
@@ -269,13 +293,15 @@ export class TelegramAuthUpdate {
       ]);
     }
 
-    inlineButtons.push(
-      [
+    if (responsible) {
+      inlineButtons.push([
         Markup.button.callback(
           '🏁 Finalizar Servicio',
           `finalizar_servicio:${service.id}`,
         ),
-      ],
+      ]);
+    }
+    inlineButtons.push(
       [
         Markup.button.callback(
           '➕ Agregar Extra',
@@ -289,7 +315,9 @@ export class TelegramAuthUpdate {
         `Cliente: ${service.cliente?.nombreTelegram || 'Cliente'}\n` +
         `Inicio: ${this.formatTime(service.horaInicioServicio)}\n` +
         `Duración pactada: ${Number(service.duracionPactadaHoras)} h\n` +
-        `Total actual: $${Number(service.totalFinal).toFixed(2)}`,
+        (responsible
+          ? `Rol: responsable\nTotal actual: $${Number(service.totalFinal).toFixed(2)}`
+          : `Rol: participante\nSolo puedes registrar extras propios.`),
       Markup.inlineKeyboard(inlineButtons),
     );
   }
@@ -299,7 +327,7 @@ export class TelegramAuthUpdate {
     const employee = await this.getEmployeeFromContext(ctx);
     if (!employee) return;
 
-    const service = await this.serviciosRepository.findOne({
+    let service = await this.serviciosRepository.findOne({
       where: [
         { empleadaId: employee.id, estado: 'en_curso' },
         { empleadaId: employee.id, estado: 'pendiente' },
@@ -307,8 +335,34 @@ export class TelegramAuthUpdate {
       order: { createdAt: 'DESC' },
     });
     if (!service) {
+      service = await this.serviciosRepository.findOne({
+        where: {
+          serviceType: 'grupal',
+          estado: In(['pendiente', 'en_curso']),
+          participantes: {
+            employeeId: employee.id,
+            status: In(['reservada', 'pendiente_pago', 'activa']),
+          },
+        },
+        relations: { participantes: true },
+        order: { createdAt: 'DESC' },
+      });
+    }
+    if (!service) {
       await ctx.reply('No tienes un servicio vigente con transporte.');
       return;
+    }
+    if (service.serviceType === 'grupal') {
+      const access = await this.groupServicesService.participantAccess(
+        service.id,
+        ctx.from!.id.toString(),
+      );
+      if (!access?.responsible) {
+        await ctx.reply(
+          'El estado de transporte está disponible únicamente para la responsable del servicio grupal.',
+        );
+        return;
+      }
     }
 
     const trips = await this.viajesRepository.find({
