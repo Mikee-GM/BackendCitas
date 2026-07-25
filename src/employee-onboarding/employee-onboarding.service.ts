@@ -621,6 +621,140 @@ export class EmployeeOnboardingService {
     return this.sanitize(onboarding);
   }
 
+  async findUserAttempts(userIdOrEmployeeId: string) {
+    const onboardings = await this.onboardingRepository.find({
+      where: [
+        { userId: userIdOrEmployeeId },
+        { employeeId: userIdOrEmployeeId },
+      ],
+      relations: {
+        user: true,
+        employee: true,
+        attempts: {
+          answers: {
+            question: true,
+            option: true,
+          },
+        },
+      },
+      order: {
+        assignedAt: 'DESC',
+        attempts: {
+          attemptNumber: 'DESC',
+        },
+      },
+    });
+
+    if (!onboardings || onboardings.length === 0) {
+      const user = await this.userRepository.findOne({
+        where: [
+          { id: userIdOrEmployeeId },
+          { empleadas: { id: userIdOrEmployeeId } },
+        ],
+        relations: { empleadas: true },
+      });
+      if (!user) {
+        throw new NotFoundException('Trabajador no encontrado');
+      }
+      return {
+        user: this.sanitizeUser(user),
+        employee: user.empleadas?.[0] ? this.sanitizeEmployee(user.empleadas[0]) : null,
+        attempts: [],
+      };
+    }
+
+    const mainUser = onboardings[0].user ? this.sanitizeUser(onboardings[0].user) : null;
+    const mainEmployee = onboardings[0].employee ? this.sanitizeEmployee(onboardings[0].employee) : null;
+
+    const allAttempts = onboardings.flatMap((ob) =>
+      (ob.attempts || []).map((att) => ({
+        id: att.id,
+        onboardingId: ob.id,
+        publicationKey: ob.publicationKey,
+        attemptNumber: att.attemptNumber,
+        status: att.status,
+        correctAnswers: att.correctAnswers,
+        totalQuestions: att.totalQuestions,
+        score: att.score,
+        startedAt: att.startedAt,
+        completedAt: att.completedAt,
+        answersCount: att.answers?.length || 0,
+      })),
+    ).sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+
+    return {
+      user: mainUser,
+      employee: mainEmployee,
+      attempts: allAttempts,
+    };
+  }
+
+  async findAttemptDetails(attemptId: string) {
+    const attempt = await this.attemptRepository.findOne({
+      where: { id: attemptId },
+      relations: {
+        onboarding: {
+          user: true,
+          employee: true,
+        },
+        answers: {
+          question: {
+            options: true,
+          },
+          option: true,
+        },
+      },
+    });
+
+    if (!attempt) {
+      throw new NotFoundException('Intento no encontrado');
+    }
+
+    const onboarding = attempt.onboarding;
+    const user = onboarding?.user ? this.sanitizeUser(onboarding.user) : null;
+    const employee = onboarding?.employee ? this.sanitizeEmployee(onboarding.employee) : null;
+
+    const questionBreakdown = await Promise.all(
+      (attempt.answers || []).map(async (ans) => {
+        const question = ans.question;
+        const selectedOption = ans.option;
+
+        const correctOption = question?.options?.find((o) => o.isCorrect) ||
+          (await this.optionRepository.findOne({
+            where: { questionId: ans.questionId, isCorrect: true },
+          }));
+
+        return {
+          answerId: ans.id,
+          questionId: ans.questionId,
+          questionText: question?.text || 'Pregunta no disponible',
+          selectedOptionId: ans.optionId,
+          selectedOptionText: selectedOption?.text || 'Opción seleccionada',
+          isCorrect: ans.isCorrect,
+          correctOptionId: correctOption?.id || null,
+          correctOptionText: correctOption?.text || null,
+          answeredAt: ans.answeredAt,
+        };
+      }),
+    );
+
+    return {
+      attempt: {
+        id: attempt.id,
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        score: attempt.score,
+        correctAnswers: attempt.correctAnswers,
+        totalQuestions: attempt.totalQuestions,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      },
+      user,
+      employee,
+      answers: questionBreakdown,
+    };
+  }
+
   async requeueUserDelivery(userId: string) {
     const onboarding = await this.onboardingRepository.findOne({
       where: { userId, active: true },

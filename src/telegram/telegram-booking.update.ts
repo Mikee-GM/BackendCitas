@@ -4,6 +4,7 @@ import {
   Logger,
   BeforeApplicationShutdown,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Update, Ctx, Action, On, Hears } from 'nestjs-telegraf';
 import { Context, Markup } from 'telegraf';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -211,6 +212,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly extensionsService: ExtensionsService,
     private readonly transportOperations: TransportOperationsService,
     private readonly disciplineService: DisciplineService,
+    private readonly configService: ConfigService,
   ) {
     // TTL / Inactivity Cleanup: run every 5 minutes to clean up users inactive for > 1 hour
     this.locationCleanupInterval = setInterval(() => {
@@ -608,7 +610,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         },
       );
     }
-    
+
     await this.replyWithServiceLocationOptions(ctx);
   }
 
@@ -621,10 +623,14 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     const match = (ctx as any).match;
-    const metodo = match[1] as 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto';
+    const metodo = match[1] as
+      | 'efectivo'
+      | 'tarjeta'
+      | 'transferencia'
+      | 'mixto';
 
     ctx.session.metodoPago = metodo;
-    
+
     await this.recordDraftConversation(
       ctx,
       'cliente',
@@ -636,31 +642,49 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       await ctx.editMessageReplyMarkup(undefined);
     } catch (err) {}
 
-    const { locationLat, locationLng, locationNotas, empleadaId, duracionPactadaHoras } = ctx.session;
-    
+    const {
+      locationLat,
+      locationLng,
+      locationNotas,
+      empleadaId,
+      duracionPactadaHoras,
+    } = ctx.session;
+
     if (!locationLat || !locationLng || !empleadaId || !duracionPactadaHoras) {
-        await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
-        ctx.session = {};
-        return;
+      await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
+      ctx.session = {};
+      return;
     }
 
-    const bankDetails = this.configService.get<string>('BANK_ACCOUNT_DETAILS') || '🏦 *Datos para Transferencia:*\nBanco: BBVA\nCuenta: 0123456789\nCLABE: 012345678901234567\nTitular: Agencia Citas';
-    
+    const bankDetails =
+      this.configService.get<string>('BANK_ACCOUNT_DETAILS') ||
+      '🏦 *Datos para Transferencia:*\nBanco: BBVA\nCuenta: 0123456789\nCLABE: 012345678901234567\nTitular: Agencia Citas';
+
     if (metodo === 'transferencia') {
       ctx.session.step = 'AWAITING_PAYMENT_RECEIPT';
-      await ctx.reply(`${bankDetails}\n\nPor favor, envíame una *FOTO* del comprobante de transferencia para verificar el pago.`, { parse_mode: 'Markdown' });
+      await ctx.reply(
+        `${bankDetails}\n\nPor favor, envíame una *FOTO* del comprobante de transferencia para verificar el pago.`,
+        { parse_mode: 'Markdown' },
+      );
       return;
     }
 
     if (metodo === 'mixto') {
       ctx.session.step = 'AWAITING_MIXED_TRANSFER_AMOUNT';
-      await ctx.reply('¿Cuánto deseas pagar por transferencia bancaria? Ingresa el monto (solo números). El resto, junto con el transporte, se pagará en efectivo.');
+      await ctx.reply(
+        '¿Cuánto deseas pagar por transferencia bancaria? Ingresa el monto (solo números). El resto, junto con el transporte, se pagará en efectivo.',
+      );
       return;
     }
 
     // Efectivo / Tarjeta proceden directo
-    const client = await this.clientesRepository.findOne({ where: { telegramChatId: ctx.from!.id.toString() } });
-    const empleada = await this.empleadasRepository.findOne({ where: { id: empleadaId }, relations: ['usuario', 'jefe'] });
+    const client = await this.clientesRepository.findOne({
+      where: { telegramChatId: ctx.from!.id.toString() },
+    });
+    const empleada = await this.empleadasRepository.findOne({
+      where: { id: empleadaId },
+      relations: { usuario: true, jefe: true },
+    });
     if (!client || !empleada) return;
 
     await this.finalizeBooking(
@@ -672,9 +696,8 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       locationLat,
       locationLng,
       locationNotas || null,
-      ctx.from!.id.toString()
+      ctx.from!.id.toString(),
     );
-
   }
 
   @Action(/^service_location:(external|[0-9a-f-]{36})$/)
@@ -1135,7 +1158,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
 
   @On('photo')
   async onPhotoUpload(@Ctx() ctx: BotContext) {
-    if (ctx.session?.step === 'AWAITING_UBER_SCREENSHOT' && ctx.session.uberTripId) {
+    if (
+      ctx.session?.step === 'AWAITING_UBER_SCREENSHOT' &&
+      ctx.session.uberTripId
+    ) {
       const telegramId = ctx.from?.id.toString();
       const user = telegramId
         ? await this.usuariosRepository.findOne({
@@ -1196,47 +1222,86 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     if (ctx.session?.step === 'AWAITING_PAYMENT_RECEIPT') {
-      const { locationLat, locationLng, locationNotas, empleadaId, duracionPactadaHoras, metodoPago } = ctx.session;
-      
-      if (!locationLat || !locationLng || !empleadaId || !duracionPactadaHoras || !metodoPago) {
-          await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
-          ctx.session = {};
-          return;
-      }
+      const {
+        locationLat,
+        locationLng,
+        locationNotas,
+        empleadaId,
+        duracionPactadaHoras,
+        metodoPago,
+      } = ctx.session;
 
-      const client = await this.clientesRepository.findOne({ where: { telegramChatId: ctx.from!.id.toString() } });
-      const empleada = await this.empleadasRepository.findOne({ where: { id: empleadaId } });
-      if (!client || !empleada) return;
-
-      const photos = (ctx.message as any)?.photo as Array<{ file_id: string }> | undefined;
-      const fileId = photos?.[photos.length - 1]?.file_id;
-      if (!fileId) {
-        await ctx.reply('Por favor, envía una FOTO (no archivo) del comprobante.');
+      if (
+        !locationLat ||
+        !locationLng ||
+        !empleadaId ||
+        !duracionPactadaHoras ||
+        !metodoPago
+      ) {
+        await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
+        ctx.session = {};
         return;
       }
 
-      const processingMsg = await ctx.reply('🔍 Verificando comprobante, por favor espera un momento...');
+      const client = await this.clientesRepository.findOne({
+        where: { telegramChatId: ctx.from!.id.toString() },
+      });
+      const empleada = await this.empleadasRepository.findOne({
+        where: { id: empleadaId },
+      });
+      if (!client || !empleada) return;
+
+      const photos = (ctx.message as any)?.photo as
+        | Array<{ file_id: string }>
+        | undefined;
+      const fileId = photos?.[photos.length - 1]?.file_id;
+      if (!fileId) {
+        await ctx.reply(
+          'Por favor, envía una FOTO (no archivo) del comprobante.',
+        );
+        return;
+      }
+
+      const processingMsg = await ctx.reply(
+        '🔍 Verificando comprobante, por favor espera un momento...',
+      );
 
       try {
         const fileUrl = await ctx.telegram.getFileLink(fileId);
-        const totalBase = duracionPactadaHoras * Number(empleada.precioBaseHora);
-        
+        const totalBase =
+          duracionPactadaHoras * Number(empleada.precioBaseHora);
+
         // Determinar el monto exacto esperado en la transferencia
-        const expectedTransferAmount = metodoPago === 'mixto' && ctx.session.mixedTransferAmount 
-            ? ctx.session.mixedTransferAmount 
+        const expectedTransferAmount =
+          metodoPago === 'mixto' && ctx.session.mixedTransferAmount
+            ? ctx.session.mixedTransferAmount
             : totalBase;
 
-        const analysis = await this.aiMessageService.analyzeReceipt(fileUrl.href, expectedTransferAmount);
-        
-        await ctx.telegram.deleteMessage(ctx.chat!.id, processingMsg.message_id).catch(() => {});
+        const analysis = await this.aiMessageService.analyzeReceipt(
+          fileUrl.href,
+          expectedTransferAmount,
+        );
+
+        await ctx.telegram
+          .deleteMessage(ctx.chat!.id, processingMsg.message_id)
+          .catch(() => {});
 
         if (!analysis.valid) {
-          await ctx.reply(`⚠️ *Problema con el comprobante:*\n\n${analysis.reason || 'El comprobante no parece ser válido.'}\n\nPor favor intenta enviar otro o avísanos si necesitas ayuda.`, { parse_mode: 'Markdown' });
+          await ctx.reply(
+            `⚠️ *Problema con el comprobante:*\n\n${analysis.reason || 'El comprobante no parece ser válido.'}\n\nPor favor intenta enviar otro o avísanos si necesitas ayuda.`,
+            { parse_mode: 'Markdown' },
+          );
           return;
         }
 
-        if (analysis.amount !== undefined && analysis.amount < expectedTransferAmount) {
-          await ctx.reply(`⚠️ *Monto incompleto:*\n\nEl comprobante muestra un pago por ${analysis.amount}, pero se esperaba ${expectedTransferAmount}. Por favor transfiere el monto restante.`, { parse_mode: 'Markdown' });
+        if (
+          analysis.amount !== undefined &&
+          analysis.amount < expectedTransferAmount
+        ) {
+          await ctx.reply(
+            `⚠️ *Monto incompleto:*\n\nEl comprobante muestra un pago por ${analysis.amount}, pero se esperaba ${expectedTransferAmount}. Por favor transfiere el monto restante.`,
+            { parse_mode: 'Markdown' },
+          );
           return;
         }
 
@@ -1251,11 +1316,13 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
           locationLat,
           locationLng,
           locationNotas || null,
-          ctx.from!.id.toString()
+          ctx.from!.id.toString(),
         );
       } catch (err) {
         console.error('Error procesando comprobante:', err);
-        await ctx.reply('Ocurrió un error verificando el comprobante. Intentaremos revisarlo manualmente.');
+        await ctx.reply(
+          'Ocurrió un error verificando el comprobante. Intentaremos revisarlo manualmente.',
+        );
       }
     }
   }
@@ -1953,8 +2020,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     try {
-      const { empleadaId, duracionPactadaHoras } =
-        ctx.session || {};
+      const { empleadaId, duracionPactadaHoras } = ctx.session || {};
 
       if (!empleadaId || !duracionPactadaHoras) {
         await ctx.reply(
@@ -1990,6 +2056,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       const transportCharge = Number(ctx.session?.customerTransportCharge ?? 0);
       const total = totalBase + transportCharge;
 
+      if (!ctx.session) ctx.session = {};
       ctx.session.step = 'AWAITING_PAYMENT_METHOD';
       const formatoMoneda = new Intl.NumberFormat('es-MX', {
         style: 'currency',
@@ -2047,10 +2114,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   ) {
     try {
       const escapeMd = (text: string): string =>
-        text
-          .replace(/\n/g, ' ') 
-          .replace(/([_*[`])/g, '\\$1'); 
-      const notasUbicacionSafe = notasUbicacion ? escapeMd(notasUbicacion) : null;
+        text.replace(/\n/g, ' ').replace(/([_*[`])/g, '\\$1');
+      const notasUbicacionSafe = notasUbicacion
+        ? escapeMd(notasUbicacion)
+        : null;
 
       let jefe: Usuarios | null = null;
       if (empleada.jefeId) {
@@ -2368,12 +2435,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
       await this.serviciosRepository.save(nuevoServicio);
     } catch (bookingErr) {
-
-    } catch (bookingErr) {
-      this.logger.error(
-        'Error crítico al finalizar reserva:',
-        bookingErr,
-      );
+      this.logger.error('Error crítico al finalizar reserva:', bookingErr);
       if (ctx.session) ctx.session = {};
       try {
         await ctx.reply(
@@ -2383,7 +2445,6 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       } catch (_) {}
     }
   }
-
 
   @Action(/^extender_servicio:(.+):(.+)$/)
   async onExtenderServicio(@Ctx() ctx: Context) {

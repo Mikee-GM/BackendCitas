@@ -59,10 +59,9 @@ export class AiProviderService {
       this.logger.error('Failed to call Groq API:', err.message);
       throw err;
     }
-  async analyzeReceipt(
-    imageUrl: string,
-    expectedAmount: number,
-  ): Promise<any> {
+  }
+
+  async analyzeReceipt(imageUrl: string, expectedAmount: number): Promise<any> {
     const apiKey = this.configService.get<string>('GROQ_API_KEY');
     if (!apiKey) {
       throw new Error('GROQ_API_KEY is not defined in environment variables');
@@ -143,18 +142,30 @@ Devuelve estrictamente un JSON con esta estructura (si un dato no existe usa nul
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content || '{}';
-      
+
       try {
         const parsed = JSON.parse(content);
         return parsed;
       } catch (e) {
         this.logger.error('Failed to parse Groq response as JSON', content);
-        return { esComprobante: false, analisisIA: { posibleFraude: true, alertas: ['Error al procesar JSON'] } };
+        return {
+          esComprobante: false,
+          analisisIA: {
+            posibleFraude: true,
+            alertas: ['Error al procesar JSON'],
+          },
+        };
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
       this.logger.error('Failed to call Groq Vision API:', err.message);
-      return { esComprobante: false, analisisIA: { posibleFraude: true, alertas: ['Error de conexión con IA'] } };
+      return {
+        esComprobante: false,
+        analisisIA: {
+          posibleFraude: true,
+          alertas: ['Error de conexión con IA'],
+        },
+      };
     }
   }
 }
