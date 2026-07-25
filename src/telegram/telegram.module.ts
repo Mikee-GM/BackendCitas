@@ -24,6 +24,8 @@ import { Viajes } from '../trips/entities/trip.entity';
 import { ExtrasCatalogo } from '../catalog-extras/entities/catalog-extra.entity';
 import { ExtrasServicio } from '../service-extras/entities/service-extra.entity';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import { AuthorizedBankAccounts } from '../services/entities/authorized-bank-account.entity';
+import { PaymentReceiptValidations } from '../services/entities/payment-receipt-validation.entity';
 import { EmployeeReportsModule } from '../employee-reports/employee-reports.module';
 import { ExtensionsModule } from '../extensions/extensions.module';
 import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
@@ -45,6 +47,8 @@ import { DisciplineModule } from '../discipline/discipline.module';
       TelegramSession,
       Viajes,
       ConversacionesTelegram,
+      AuthorizedBankAccounts,
+      PaymentReceiptValidations,
     ]),
     AuthModule,
     LoyaltyModule,

@@ -12,6 +12,8 @@ import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { LiquidationsModule } from '../liquidations/liquidations.module';
 import { TransportOperationsModule } from '../transport-operations/transport-operations.module';
 import { ConversacionesTelegram } from '../telegram-conversations/entities/telegram-conversation.entity';
+import { AuthorizedBankAccounts } from './entities/authorized-bank-account.entity';
+import { PaymentReceiptValidations } from './entities/payment-receipt-validation.entity';
 import { DisciplineModule } from '../discipline/discipline.module';
 
 @Module({
@@ -22,6 +24,8 @@ import { DisciplineModule } from '../discipline/discipline.module';
       Choferes,
       Usuarios,
       ConversacionesTelegram,
+      AuthorizedBankAccounts,
+      PaymentReceiptValidations,
     ]),
     forwardRef(() => TelegramModule),
     AiModule,

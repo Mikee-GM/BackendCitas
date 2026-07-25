@@ -78,4 +78,11 @@ Evento: ${event}. No inventes información, no uses Markdown y devuelve solo el 
       return fallback;
     }
   }
+
+  async analyzeReceipt(
+    imageUrl: string,
+    expectedAmount: number,
+  ): Promise<any> {
+    return this.aiProviderService.analyzeReceipt(imageUrl, expectedAmount);
+  }
 }

@@ -61,14 +61,14 @@ export class Servicios {
 
   @Column('enum', {
     name: 'metodo_pago',
-    enum: ['efectivo', 'tarjeta', 'transferencia'],
+    enum: ['efectivo', 'tarjeta', 'transferencia', 'mixto'],
   })
   @ApiProperty({
     description: 'Metodo Pago',
-    enum: ['efectivo', 'tarjeta', 'transferencia'],
+    enum: ['efectivo', 'tarjeta', 'transferencia', 'mixto'],
     example: 'efectivo',
   })
-  metodoPago: 'efectivo' | 'tarjeta' | 'transferencia';
+  metodoPago: 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto';
 
   @Column('numeric', {
     name: 'duracion_pactada_horas',

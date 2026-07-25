@@ -13,6 +13,8 @@ import { RealtimeEventsService } from '../realtime/realtime.service';
 import { Usuarios } from '../users/entities/user.entity';
 import { Clientes } from '../clients/entities/client.entity';
 import { Empleadas } from '../employees/entities/employee.entity';
+import { AuthorizedBankAccounts } from '../services/entities/authorized-bank-account.entity';
+import { PaymentReceiptValidations } from '../services/entities/payment-receipt-validation.entity';
 import { Choferes } from '../drivers/entities/driver.entity';
 import { Servicios } from '../services/entities/service.entity';
 import { Viajes } from '../trips/entities/trip.entity';
@@ -45,8 +47,10 @@ import { DisciplineService } from '../discipline/discipline.service';
 interface SessionData {
   step?:
     | 'AWAITING_DURATION'
-    | 'AWAITING_PAYMENT_METHOD'
     | 'AWAITING_LOCATION'
+    | 'AWAITING_PAYMENT_METHOD'
+    | 'AWAITING_MIXED_TRANSFER_AMOUNT'
+    | 'AWAITING_PAYMENT_RECEIPT'
     | 'AWAITING_RATING_COMMENT'
     | 'AWAITING_EMPLOYEE_DRIVER_RATING_COMMENT'
     | 'AWAITING_EMPLOYEE_CONDUCT_DESCRIPTION'
@@ -57,7 +61,11 @@ interface SessionData {
     | 'CHAT_CON_EMPLEADA';
   empleadaId?: string;
   duracionPactadaHoras?: number;
-  metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
+  metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto';
+  mixedTransferAmount?: number;
+  locationLat?: string;
+  locationLng?: string;
+  locationNotas?: string | null;
   servicioIdCalificacion?: string;
   pendingRating?: number;
   disciplineTripId?: string;
@@ -177,6 +185,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     private readonly empleadasRepository: Repository<Empleadas>,
     @InjectRepository(Servicios)
     private readonly serviciosRepository: Repository<Servicios>,
+    @InjectRepository(AuthorizedBankAccounts)
+    private readonly authorizedBankAccountsRepository: Repository<AuthorizedBankAccounts>,
+    @InjectRepository(PaymentReceiptValidations)
+    private readonly paymentReceiptValidationsRepository: Repository<PaymentReceiptValidations>,
     @InjectRepository(ExtrasCatalogo)
     private readonly extrasCatalogoRepository: Repository<ExtrasCatalogo>,
     @InjectRepository(ExtrasServicio)
@@ -572,7 +584,7 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     const duracion = parseFloat(match[1]);
 
     ctx.session.duracionPactadaHoras = duracion;
-    ctx.session.step = 'AWAITING_PAYMENT_METHOD';
+    ctx.session.step = 'AWAITING_LOCATION';
     await this.recordDraftConversation(
       ctx,
       'cliente',
@@ -582,37 +594,25 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     try {
       await ctx.editMessageText(
         `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
-          `💳 Ahora, selecciona el método de pago:`,
+          clientMessages.locationRequest(),
         {
           parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
-              Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
-            ],
-            [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
-          ]),
         },
       );
     } catch (err) {
       await ctx.reply(
         `⏱️ Duración registrada: *${duracion} horas*.\n\n` +
-          `💳 Ahora, selecciona el método de pago:`,
+          clientMessages.locationRequest(),
         {
           parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
-              Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
-            ],
-            [Markup.button.callback('🏦 Transferencia', 'pago_transferencia')],
-          ]),
         },
       );
     }
+    
+    await this.replyWithServiceLocationOptions(ctx);
   }
 
-  @Action(/^pago_(efectivo|tarjeta|transferencia)$/)
+  @Action(/^pago_(efectivo|tarjeta|transferencia|mixto)$/)
   async onSelectPayment(@Ctx() ctx: BotContext) {
     await ctx.answerCbQuery();
     if (ctx.session?.step !== 'AWAITING_PAYMENT_METHOD') {
@@ -621,10 +621,10 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     }
 
     const match = (ctx as any).match;
-    const metodo = match[1] as 'efectivo' | 'tarjeta' | 'transferencia';
+    const metodo = match[1] as 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto';
 
     ctx.session.metodoPago = metodo;
-    ctx.session.step = 'AWAITING_LOCATION';
+    
     await this.recordDraftConversation(
       ctx,
       'cliente',
@@ -632,15 +632,49 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     );
 
     try {
-      // Editar el mensaje para remover los botones inline de pago
-      await ctx.editMessageText(clientMessages.locationRequest(), {
-        parse_mode: 'Markdown',
-      });
-    } catch (err) {
-      console.error('Error al editar mensaje de pago:', err);
+      // Remover los botones inline de pago
+      await ctx.editMessageReplyMarkup(undefined);
+    } catch (err) {}
+
+    const { locationLat, locationLng, locationNotas, empleadaId, duracionPactadaHoras } = ctx.session;
+    
+    if (!locationLat || !locationLng || !empleadaId || !duracionPactadaHoras) {
+        await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
+        ctx.session = {};
+        return;
     }
 
-    await this.replyWithServiceLocationOptions(ctx);
+    const bankDetails = this.configService.get<string>('BANK_ACCOUNT_DETAILS') || '🏦 *Datos para Transferencia:*\nBanco: BBVA\nCuenta: 0123456789\nCLABE: 012345678901234567\nTitular: Agencia Citas';
+    
+    if (metodo === 'transferencia') {
+      ctx.session.step = 'AWAITING_PAYMENT_RECEIPT';
+      await ctx.reply(`${bankDetails}\n\nPor favor, envíame una *FOTO* del comprobante de transferencia para verificar el pago.`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    if (metodo === 'mixto') {
+      ctx.session.step = 'AWAITING_MIXED_TRANSFER_AMOUNT';
+      await ctx.reply('¿Cuánto deseas pagar por transferencia bancaria? Ingresa el monto (solo números). El resto, junto con el transporte, se pagará en efectivo.');
+      return;
+    }
+
+    // Efectivo / Tarjeta proceden directo
+    const client = await this.clientesRepository.findOne({ where: { telegramChatId: ctx.from!.id.toString() } });
+    const empleada = await this.empleadasRepository.findOne({ where: { id: empleadaId }, relations: ['usuario', 'jefe'] });
+    if (!client || !empleada) return;
+
+    await this.finalizeBooking(
+      ctx,
+      client,
+      empleada,
+      duracionPactadaHoras,
+      metodo,
+      locationLat,
+      locationLng,
+      locationNotas || null,
+      ctx.from!.id.toString()
+    );
+
   }
 
   @Action(/^service_location:(external|[0-9a-f-]{36})$/)
@@ -1100,67 +1134,129 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
   }
 
   @On('photo')
-  async onEmployeeUberScreenshot(@Ctx() ctx: BotContext) {
-    if (
-      ctx.session?.step !== 'AWAITING_UBER_SCREENSHOT' ||
-      !ctx.session.uberTripId
-    )
-      return;
-    const telegramId = ctx.from?.id.toString();
-    const user = telegramId
-      ? await this.usuariosRepository.findOne({
-          where: { telegramChatId: telegramId },
-        })
-      : null;
-    const photos = (ctx.message as any)?.photo as
-      | Array<{ file_id: string }>
-      | undefined;
-    const fileId = photos?.[photos.length - 1]?.file_id;
-    if (!user || !fileId) {
-      await ctx.reply(
-        'No fue posible procesar la captura. Intenta nuevamente.',
-      );
+  async onPhotoUpload(@Ctx() ctx: BotContext) {
+    if (ctx.session?.step === 'AWAITING_UBER_SCREENSHOT' && ctx.session.uberTripId) {
+      const telegramId = ctx.from?.id.toString();
+      const user = telegramId
+        ? await this.usuariosRepository.findOne({
+            where: { telegramChatId: telegramId },
+          })
+        : null;
+      const photos = (ctx.message as any)?.photo as
+        | Array<{ file_id: string }>
+        | undefined;
+      const fileId = photos?.[photos.length - 1]?.file_id;
+      if (!user || !fileId) {
+        await ctx.reply(
+          'No fue posible procesar la captura. Intenta nuevamente.',
+        );
+        return;
+      }
+      try {
+        const trip = await this.servicesService.saveEmployeeUberScreenshot(
+          ctx.session.uberTripId,
+          user.id,
+          fileId,
+        );
+        ctx.session = {};
+        await ctx.reply('Captura enviada para validación.');
+        if (trip.tipo === 'ida' && trip.servicio.estado === 'en_curso') {
+          const serviceMessage = await ctx.reply(
+            `*Servicio en curso*\n\n` +
+              `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
+              `• *Duración:* ${trip.servicio.duracionPactadaHoras} horas\n` +
+              `• *Método de pago:* ${trip.servicio.metodoPago.toUpperCase()}\n\n` +
+              `Cuando termine la actividad con el cliente, finaliza el servicio desde aquí.`,
+            {
+              parse_mode: 'Markdown',
+              ...Markup.inlineKeyboard([
+                [
+                  Markup.button.callback(
+                    'Finalizar servicio',
+                    `finalizar_servicio:${trip.servicio.id}`,
+                  ),
+                ],
+                [
+                  Markup.button.callback(
+                    'Agregar extra',
+                    `agregar_extra_list:${trip.servicio.id}`,
+                  ),
+                ],
+              ]),
+            },
+          );
+          await this.serviciosRepository.update(trip.servicio.id, {
+            telegramEmpleadaMensajeId: serviceMessage.message_id.toString(),
+          });
+        }
+      } catch (error: any) {
+        await ctx.reply(error.message || 'No fue posible guardar la captura.');
+      }
       return;
     }
-    try {
-      const trip = await this.servicesService.saveEmployeeUberScreenshot(
-        ctx.session.uberTripId,
-        user.id,
-        fileId,
-      );
-      ctx.session = {};
-      await ctx.reply('Captura enviada para validación.');
-      if (trip.tipo === 'ida' && trip.servicio.estado === 'en_curso') {
-        const serviceMessage = await ctx.reply(
-          `*Servicio en curso*\n\n` +
-            `• *Cliente:* ${trip.servicio.cliente?.nombreTelegram || 'Desconocido'}\n` +
-            `• *Duración:* ${trip.servicio.duracionPactadaHoras} horas\n` +
-            `• *Método de pago:* ${trip.servicio.metodoPago.toUpperCase()}\n\n` +
-            `Cuando termine la actividad con el cliente, finaliza el servicio desde aquí.`,
-          {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback(
-                  'Finalizar servicio',
-                  `finalizar_servicio:${trip.servicio.id}`,
-                ),
-              ],
-              [
-                Markup.button.callback(
-                  'Agregar extra',
-                  `agregar_extra_list:${trip.servicio.id}`,
-                ),
-              ],
-            ]),
-          },
-        );
-        await this.serviciosRepository.update(trip.servicio.id, {
-          telegramEmpleadaMensajeId: serviceMessage.message_id.toString(),
-        });
+
+    if (ctx.session?.step === 'AWAITING_PAYMENT_RECEIPT') {
+      const { locationLat, locationLng, locationNotas, empleadaId, duracionPactadaHoras, metodoPago } = ctx.session;
+      
+      if (!locationLat || !locationLng || !empleadaId || !duracionPactadaHoras || !metodoPago) {
+          await ctx.reply('❌ Datos incompletos. Por favor inicia nuevamente.');
+          ctx.session = {};
+          return;
       }
-    } catch (error: any) {
-      await ctx.reply(error.message || 'No fue posible guardar la captura.');
+
+      const client = await this.clientesRepository.findOne({ where: { telegramChatId: ctx.from!.id.toString() } });
+      const empleada = await this.empleadasRepository.findOne({ where: { id: empleadaId } });
+      if (!client || !empleada) return;
+
+      const photos = (ctx.message as any)?.photo as Array<{ file_id: string }> | undefined;
+      const fileId = photos?.[photos.length - 1]?.file_id;
+      if (!fileId) {
+        await ctx.reply('Por favor, envía una FOTO (no archivo) del comprobante.');
+        return;
+      }
+
+      const processingMsg = await ctx.reply('🔍 Verificando comprobante, por favor espera un momento...');
+
+      try {
+        const fileUrl = await ctx.telegram.getFileLink(fileId);
+        const totalBase = duracionPactadaHoras * Number(empleada.precioBaseHora);
+        
+        // Determinar el monto exacto esperado en la transferencia
+        const expectedTransferAmount = metodoPago === 'mixto' && ctx.session.mixedTransferAmount 
+            ? ctx.session.mixedTransferAmount 
+            : totalBase;
+
+        const analysis = await this.aiMessageService.analyzeReceipt(fileUrl.href, expectedTransferAmount);
+        
+        await ctx.telegram.deleteMessage(ctx.chat!.id, processingMsg.message_id).catch(() => {});
+
+        if (!analysis.valid) {
+          await ctx.reply(`⚠️ *Problema con el comprobante:*\n\n${analysis.reason || 'El comprobante no parece ser válido.'}\n\nPor favor intenta enviar otro o avísanos si necesitas ayuda.`, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        if (analysis.amount !== undefined && analysis.amount < expectedTransferAmount) {
+          await ctx.reply(`⚠️ *Monto incompleto:*\n\nEl comprobante muestra un pago por ${analysis.amount}, pero se esperaba ${expectedTransferAmount}. Por favor transfiere el monto restante.`, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        await ctx.reply('✅ ¡Comprobante verificado correctamente!');
+
+        await this.finalizeBooking(
+          ctx,
+          client,
+          empleada,
+          duracionPactadaHoras,
+          metodoPago,
+          locationLat,
+          locationLng,
+          locationNotas || null,
+          ctx.from!.id.toString()
+        );
+      } catch (err) {
+        console.error('Error procesando comprobante:', err);
+        await ctx.reply('Ocurrió un error verificando el comprobante. Intentaremos revisarlo manualmente.');
+      }
     }
   }
 
@@ -1849,11 +1945,18 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
     // Sanitize notasUbicacion so it is safe to embed in Markdown messages
     const notasUbicacionSafe = notasUbicacion ? escapeMd(notasUbicacion) : null;
 
+    // Guardamos la ubicación en la sesión
+    if (ctx.session) {
+      ctx.session.locationLat = lat;
+      ctx.session.locationLng = lng;
+      ctx.session.locationNotas = notasUbicacion;
+    }
+
     try {
-      const { empleadaId, duracionPactadaHoras, metodoPago } =
+      const { empleadaId, duracionPactadaHoras } =
         ctx.session || {};
 
-      if (!empleadaId || !duracionPactadaHoras || !metodoPago) {
+      if (!empleadaId || !duracionPactadaHoras) {
         await ctx.reply(
           '❌ Datos incompletos del proceso. Por favor inicia nuevamente.',
         );
@@ -1882,6 +1985,72 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
         ctx.session = {};
         return;
       }
+
+      const totalBase = duracionPactadaHoras * Number(empleada.precioBaseHora);
+      const transportCharge = Number(ctx.session?.customerTransportCharge ?? 0);
+      const total = totalBase + transportCharge;
+
+      ctx.session.step = 'AWAITING_PAYMENT_METHOD';
+      const formatoMoneda = new Intl.NumberFormat('es-MX', {
+        style: 'currency',
+        currency: 'MXN',
+      });
+
+      let priceMsg = `💰 *Resumen del Costo:*\n`;
+      priceMsg += `• Servicio (${duracionPactadaHoras}h): ${formatoMoneda.format(totalBase)}\n`;
+      if (transportCharge > 0) {
+        priceMsg += `• Cargo de transporte: ${formatoMoneda.format(transportCharge)}\n`;
+      }
+      priceMsg += `\n*TOTAL A PAGAR: ${formatoMoneda.format(total)}*\n\n`;
+      priceMsg += `💳 Por favor, selecciona cómo deseas pagar:`;
+
+      await ctx.reply(priceMsg, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('💵 Efectivo', 'pago_efectivo'),
+            Markup.button.callback('💳 Tarjeta', 'pago_tarjeta'),
+          ],
+          [
+            Markup.button.callback('🏦 Transferencia', 'pago_transferencia'),
+            Markup.button.callback('🌗 Mixto (Efecti+Digital)', 'pago_mixto'),
+          ],
+        ]),
+      });
+      return;
+    } catch (bookingErr) {
+      this.logger.error(
+        'Error crítico en flujo de contratación (onLocation):',
+        bookingErr,
+      );
+      if (ctx.session) ctx.session = {};
+      try {
+        await ctx.reply(
+          '⚠️ Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo desde el catálogo.',
+          Markup.removeKeyboard(),
+        );
+      } catch (_) {}
+    }
+  }
+
+  async finalizeBooking(
+    ctx: BotContext,
+    client: Clientes,
+    empleada: Empleadas,
+    duracionPactadaHoras: number,
+    metodoPago: 'efectivo' | 'tarjeta' | 'transferencia' | 'mixto',
+    lat: string,
+    lng: string,
+    notasUbicacion: string | null,
+    telegramId: string,
+    comprobanteFileId?: string,
+  ) {
+    try {
+      const escapeMd = (text: string): string =>
+        text
+          .replace(/\n/g, ' ') 
+          .replace(/([_*[`])/g, '\\$1'); 
+      const notasUbicacionSafe = notasUbicacion ? escapeMd(notasUbicacion) : null;
 
       let jefe: Usuarios | null = null;
       if (empleada.jefeId) {
@@ -2199,22 +2368,22 @@ export class TelegramBookingUpdate implements BeforeApplicationShutdown {
       // 2. SAVE FINAL CON TODOS LOS CAMBIOS ACUMULADOS
       await this.serviciosRepository.save(nuevoServicio);
     } catch (bookingErr) {
-      // Safety net: never leave the client frozen without a response
+
+    } catch (bookingErr) {
       this.logger.error(
-        'Error crítico en flujo de contratación (onLocation):',
+        'Error crítico al finalizar reserva:',
         bookingErr,
       );
       if (ctx.session) ctx.session = {};
       try {
         await ctx.reply(
-          '⚠️ Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo desde el catálogo.',
+          '⚠️ Ocurrió un error al procesar tu solicitud.',
           Markup.removeKeyboard(),
         );
-      } catch (_) {
-        /* ignore secondary send error */
-      }
+      } catch (_) {}
     }
   }
+
 
   @Action(/^extender_servicio:(.+):(.+)$/)
   async onExtenderServicio(@Ctx() ctx: Context) {
